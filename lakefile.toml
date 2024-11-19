@@ -11,5 +11,10 @@ autoImplicit = false
 name = "mathlib"
 scope = "leanprover-community"
 
+[[require]]
+name = "batteries"
+scope = "leanprover-community"
+version = "main"
+
 [[lean_lib]]
 name = "Thesis"
