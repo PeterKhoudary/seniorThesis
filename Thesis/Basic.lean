@@ -1,5 +1,4 @@
 import Mathlib.Algebra.Order.Ring.WithTop
-import Lean.Data.RBMap
 open Classical Std
 
 -- I did algorithmic verification for my last project, and wanted to continue
@@ -70,7 +69,6 @@ def getInNeighbors (G : Graph) (v : Vertex) : HashSet Vertex :=
 -- End graph library
 
 -- Bellman-Ford Implementation
-
 -- This performs the relaxation step of the Bellman-Ford algorithm for a particuar vertex
 def extendShortestPath (G : Graph) (prevDists : PathDistances) (v : Vertex) (vDist : Option Weight) :=
   let inEdges := getInEdges G v
@@ -84,11 +82,12 @@ def extendShortestPath (G : Graph) (prevDists : PathDistances) (v : Vertex) (vDi
 
 -- The meat of the bellman ford algorithm. Given the previous shortest path distances,
 -- updates them by looking at every edge. Terminates after we've done as many rounds
--- as there vertices in the graph
+-- as there vertices in the graph.
 def BF_loop (G : Graph) (dists : PathDistances) (hops : Nat) : Bool × PathDistances  :=
   if hops = 0
   -- If we're ever here, then our distances haven't converged after |V| rounds
   -- Indicating a negative cycle, so no shortest paths
+  -- We return a booolean here to indicate that shortest paths are not possible
   then ⟨false, ∅⟩
   else
   -- update shortest distances
@@ -136,22 +135,28 @@ inductive Path: Graph → List Edge → (u v : Vertex) → Prop
 | path_edge: ∀ G u v, (getOutEdges G u).contains v → Path G [(u, v, (getOutEdges G u).get! v)] u v
 | path_cons: ∀ G p x y z, Path G p y z → (getOutEdges G x).contains y → Path G ((x, y, (getOutEdges G x).get! y) :: p) x z
 
+-- The weight of a path
 def pathWeight : List Edge → Weight
 | [] => 0
 | (_, _, w) :: edges => w + pathWeight edges
 
+-- The shortest path definition
 def shortestPath (G : Graph) (u v : Vertex) (p : List Edge) :=
   Path G p u v ∧ ∀ l, Path G l u v → pathWeight l <= pathWeight p
 
-/-- The weight of the shortest path of at most `n` steps, if one exists,
-otherwise `∞`. -/
+-- Defines the shortest k-hop path of a graph, as defined in the paper
+-- It just makes some claim about the weight of the shortest path that exists
 noncomputable
-def shortestPathWeight (G : Graph) (u v : Vertex) (n : Nat) : WithTop Int :=
-  if h : ∃ (l : List Edge), shortestPath G u v l ∧ l.length ≤ n then
+def shortestPathWeight (G : Graph) (u v : Vertex) (k : Nat) : WithTop Int :=
+  if h : ∃ (l : List Edge), shortestPath G u v l ∧ l.length ≤ k then
     pathWeight (choose h)
   else
     ⊤
 
+-- This is the proof of the inductive case of BF, where you look at all in-neighbors
+-- and update the shortest path to a vertex. The proof on paper is quite simple,
+-- but I'm struggling to work the with hashmap types to unpack the definitions
+-- I don't know if I should try switching
 theorem extend_hops (G : Graph) (s : Vertex) (dists : HashMap Vertex (WithTop Int))
     (hops : Nat) (h : ∀ v, dists.getD v ⊤ = shortestPathWeight G s v hops) :
     ∀ v, (dists.map (extendShortestPath G dists)).getD v (⊤ : WithTop Int) =
@@ -163,3 +168,16 @@ theorem extend_hops (G : Graph) (s : Vertex) (dists : HashMap Vertex (WithTop In
         sorry
       . rw [HashMap.map];
         sorry
+
+-- Structure of proof of correctness for BF alg as a whole
+theorem BF_correct (G : Graph) (s : Vertex) : ∀ (v : Vertex),
+  (BF G s).2.getD v ⊤ = shortestPathWeight G s v (G.size + 1) := by
+  intro v
+  induction G.size with
+  | zero =>
+      rw [BF, BF_loop]
+      split_ifs with h
+      . simp [shortestPathWeight]
+        sorry
+      . sorry
+  | succ n ih => sorry
