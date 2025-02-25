@@ -181,3 +181,7 @@ theorem BF_correct (G : Graph) (s : Vertex) : ∀ (v : Vertex),
         sorry
       . sorry
   | succ n ih => sorry
+
+def fac: Nat → Nat
+| 0 => 1
+| n => n * (fac (n - 1))

@@ -28,12 +28,6 @@ abbrev Graph := List (Vertex × (List (Vertex × Weight)))
 -- Using WithTop as our reprensation of infinity
 abbrev PathDistances := List (Vertex × (WithTop Weight))
 
--- -- Checks if two maps are equal. I feel like I shouldn't have to write this
--- -- But I couldn't figure out how to get lean to be able to decide this
--- def mapsEq (l r : PathDistances) : Bool :=
---   let compKeys := l.map (fun key val => val == r.getD key none)
---   compKeys.fold (fun acc _ same => same && acc) true
-
 -- Graph construction / manipulation functions
 -- Creates an empty graph
 def emptyGraph : Graph := []
@@ -42,7 +36,7 @@ def emptyGraph : Graph := []
 def addVertex (G : Graph) (v : Vertex): Graph :=
   match G with
   | [] => [(v, [])]
-  | (vert, edges) :: rest => if vert = v then G else (vert, edges) :: addVertex rest v
+  | (vert, edges) :: rest => if vert = v then G else (vert, edges) :: (addVertex rest v)
 
 -- This also inserts both vertices into the graph if they do not exist
 def addEdge (G : Graph) (e : Edge) : Graph :=
@@ -65,6 +59,7 @@ def getOutNeighbors (G : Graph) (v : Vertex) : List Vertex :=
   let outPairs := getOutEdges G v
   outPairs.map (fun (vert, _) => vert)
 
+-- Returns the in-edges of a vertex, with the weights
 def getInEdges (G : Graph) (v : Vertex) : List (Vertex × Weight) :=
   G.foldl (fun acc (vert, edges) =>
     edges.foldl (fun acc' (vert', weight) =>
@@ -84,42 +79,37 @@ def getInNeighbors (G : Graph) (v : Vertex) : List Vertex :=
 def extendShortestPath (G : Graph) (prevDists : PathDistances) (pair : Vertex × WithTop Weight) : Vertex × WithTop Weight :=
   let (v, vDist) := pair
   let inEdges := getInEdges G v
-  inEdges.foldl (fun acc (inNeighbor, edgeWeight) =>
-    let neighborDist := prevDists.findSome? (fun (vert, dist) => if vert = inNeighbor then dist else none)
-    match vDist, neighborDist with
-    | some dist, some neighborDist => (v, min (neighborDist + edgeWeight) dist)
-    | none, some neighborDist => (v, neighborDist + edgeWeight)
-    | _, _ => acc
-  ) pair
+  let newDist := inEdges.foldl (fun acc (u, w) =>
+    let uPair := prevDists.find? (fun (vert, _) => vert = u)
+    match uPair with
+    | none => acc
+    | some (_, uDist) => min  (uDist + w) acc
+  ) vDist
+
+  (v, newDist)
 
 -- The meat of the bellman ford algorithm. Given the previous shortest path distances,
 -- updates them by looking at every edge. Terminates after we've done as many rounds
 -- as there vertices in the graph.
-def BF_loop (G : Graph) (dists : PathDistances) (hops : Nat) : Bool × PathDistances  :=
-  if hops = 0
-  -- If we're ever here, then our distances haven't converged after |V| rounds
-  -- Indicating a negative cycle, so no shortest paths
-  -- We return a booolean here to indicate that shortest paths are not possible
-  then ⟨false, ∅⟩
-  else
-  -- update shortest distances
-    let newMinDists := dists.map (extendShortestPath G dists)
-    -- ⟨true, newMinDists⟩
-    -- terminate if nothing changes
-    if newMinDists = dists
-    then ⟨true, newMinDists⟩
-    -- otherwise do another round with the new distances
-    else BF_loop G newMinDists (hops - 1)
+def BF_loop (G : Graph) (dists : PathDistances) (numVertices : Nat) : Bool × PathDistances  :=
+  loop dists 0
+  where
+    loop (dists : PathDistances) (hops : Nat) : Bool × PathDistances :=
+      if numVertices - hops = 0
+      then (false, [])
+      else
+        let newMinDists := dists.map (extendShortestPath G dists)
+        if newMinDists = dists
+        then (true, newMinDists)
+        else loop newMinDists (hops + 1)
+    termination_by numVertices - hops
 
 -- The Bellman-Ford algorithm, but mainly just initializes state and calls the helper
 def BF (G : Graph) (source : Vertex) : Bool × PathDistances :=
   -- This just maps every vertex to none, except the source which has shortest path of dist 0
-  let dists : PathDistances := G.map (fun (vert, _) => if vert = source then (vert, 0) else (vert, none))
+  let dists : PathDistances := G.map (fun (vert, _) => if vert = source then (vert, 0) else (vert, ⊤))
 
-  -- size + 1 because we want to terminate after exactly running |V| rounds
-  -- Normally you'd start at 0 then go up to |V|, but switching it to this form
-  -- gives us termination for free.
-  BF_loop G dists (dists.length + 1)
+  BF_loop G dists G.length
 
 -- End Implementation
 
@@ -128,10 +118,11 @@ def BF (G : Graph) (source : Vertex) : Bool × PathDistances :=
 def simplePaths := fromEdges [(1, 3, 3), (1, 2, 1), (2, 3, 1)]
 #eval BF simplePaths 2
 #eval BF simplePaths 3
+#eval BF simplePaths 1
 
 -- -- Here's an example of it working with negative edges, in a case where Dijkstra's fails
-def negEdgeShorter := fromEdges [(1, 3, 1), (1, 2, 2), (2, 3, -3)]
-#eval BF simplePaths 1
+def negEdgeShorter := fromEdges [(1, 3, 1), (1, 2, 2), (2, 3, -2)]
+#eval BF negEdgeShorter 1
 
 -- -- Here's it detecting a negative edge cycle, note doesn't matter where you start
 def negCycle := fromEdges [(1, 2, 1), (2, 3, 2), (3, 1, -4)]
@@ -140,56 +131,71 @@ def negCycle := fromEdges [(1, 2, 1), (2, 3, 2), (3, 1, -4)]
 #eval BF negCycle 3
 
 -- PATH DEFINITIONS
-
 -- -- Defintions relating to paths and shortest paths
--- inductive Path: Graph → List Edge → (u v : Vertex) → Prop
--- | path_self: ∀ G u, G.contains u → Path G [] u u
--- | path_edge: ∀ G u v, (getOutEdges G u).contains v → Path G [(u, v, (getOutEdges G u).get! v)] u v
--- | path_cons: ∀ G p x y z, Path G p y z → (getOutEdges G x).contains y → Path G ((x, y, (getOutEdges G x).get! y) :: p) x z
+inductive Path: Graph → List Edge → (u v : Vertex) → Prop
+| path_self: ∀ G u, (u, _) ∈ G → Path G [] u u
+| path_edge: ∀ G p u v w, Path G p u u → (v, w) ∈ (getOutEdges G u) → Path G [(u, v, w)] u v
 
 -- -- The weight of a path
--- def pathWeight : List Edge → Weight
--- | [] => 0
--- | (_, _, w) :: edges => w + pathWeight edges
+def pathWeight : List Edge → Weight
+| [] => 0
+| (_, _, w) :: edges => w + pathWeight edges
 
 -- -- The shortest path definition
--- def shortestPath (G : Graph) (u v : Vertex) (p : List Edge) :=
---   Path G p u v ∧ ∀ l, Path G l u v → pathWeight l <= pathWeight p
+def shortestPath (G : Graph) (u v : Vertex) (p : List Edge) :=
+  Path G p u v ∧ ∀ l, Path G l u v → pathWeight l <= pathWeight p
 
 -- -- Defines the shortest k-hop path of a graph, as defined in the paper
 -- -- It just makes some claim about the weight of the shortest path that exists
--- noncomputable
--- def shortestPathWeight (G : Graph) (u v : Vertex) (k : Nat) : WithTop Int :=
---   if h : ∃ (l : List Edge), shortestPath G u v l ∧ l.length ≤ k then
---     pathWeight (choose h)
---   else
---     ⊤
+noncomputable
+def shortestPathWeight (G : Graph) (u v : Vertex) (k : Nat) : WithTop Int :=
+  if h : ∃ (l : List Edge), shortestPath G u v l ∧ l.length ≤ k then
+    pathWeight (choose h)
+  else
+    ⊤
 
--- -- This is the proof of the inductive case of BF, where you look at all in-neighbors
--- -- and update the shortest path to a vertex. The proof on paper is quite simple,
--- -- but I'm struggling to work the with hashmap types to unpack the definitions
--- -- I don't know if I should try switching
--- theorem extend_hops (G : Graph) (s : Vertex) (dists : HashMap Vertex (WithTop Int))
---     (hops : Nat) (h : ∀ v, dists.getD v ⊤ = shortestPathWeight G s v hops) :
---     ∀ v, (dists.map (extendShortestPath G dists)).getD v (⊤ : WithTop Int) =
---       shortestPathWeight G s v (hops + 1) := by
---       intro v
---       simp [shortestPathWeight]
---       split_ifs with h'
---       .
---         sorry
---       . rw [HashMap.map];
---         sorry
+-- This is the proof of the inductive case of BF, where you look at all in-neighbors
+-- and update the shortest path to a vertex.
+theorem extend_hops (G : Graph) (s : Vertex) (dists : PathDistances)
+    (hops : Nat) (h : ∀ v vDist, (v, vDist) ∈ dists → vDist = shortestPathWeight G s v hops) :
+    ∀ v vDist, (v, vDist) ∈ (dists.map (extendShortestPath G dists)) → vDist = shortestPathWeight G s v (hops + 1) := by
+  intro v vDist hIn
+  rw [shortestPathWeight]
+  split_ifs with h'
+  . rcases h' with ⟨l, ⟨hl, hlen⟩⟩
+    -- rw [choose]
+    -- rw [pathWeight (choose )]
 
--- -- Structure of proof of correctness for BF alg as a whole
--- theorem BF_correct (G : Graph) (s : Vertex) : ∀ (v : Vertex),
---   (BF G s).2.getD v ⊤ = shortestPathWeight G s v (G.size + 1) := by
---   intro v
---   induction G.size with
---   | zero =>
---       rw [BF, BF_loop]
---       split_ifs with h
---       . simp [shortestPathWeight]
---         sorry
---       . sorry
---   | succ n ih => sorry
+    sorry
+  . rw [h v vDist]
+    simp at h'
+    rw [shortestPathWeight]
+    split_ifs with h''
+    . rcases h'' with ⟨l', ⟨hl', hlen'⟩⟩
+      have negateLength := by apply h' l' hl'
+      omega
+    . trivial
+    simp [List.map] at hIn
+    -- rcases hIn with ⟨u, w, hIn⟩
+    -- rcases hIn with ⟨hIn, hEx⟩
+    -- simp [extendShortestPath] at hEx
+    -- rcases hEx with ⟨hUv, hFold⟩
+    -- simp [getInEdges, List.foldl] at hFold
+    sorry
+
+-- General proof of correctness of BF by induction on path lengths
+theorem BF_correct (G : Graph) (s : Vertex): ∀ v vDist, (v, vDist) ∈ (BF G s).2 → vDist = shortestPathWeight G s v G.length := by
+  intro v vDist hIn
+  have h := BF G s
+  induction G.length with
+  | zero =>
+    simp [BF] at h
+    simp [BF_loop] at h
+    simp [List.map] at h
+    simp [shortestPathWeight] at h
+    simp [List.map] at hIn
+    simp [shortestPathWeight] at hIn
+    trivial
+  | succ n ih =>
+
+    sorry
