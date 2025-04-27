@@ -25,13 +25,9 @@ open Permutation
 -- Minor lemma which shortens later proofs
 
 lemma perm_self {A : Type* } : ∀ (l : List A), Permutation l l := by
-
   intro l
-
   induction l with
-
   | nil => apply perm_nil
-
   | cons x xs ih => apply perm_cons; apply ih
 
 
@@ -44,9 +40,7 @@ lemma perm_self {A : Type* } : ∀ (l : List A), Permutation l l := by
 -- However I think it's slightly more natural to think about it this way
 
 def Sorted : List Int -> Prop
-
 | f :: s :: t => f ≤ s ∧ Sorted (s :: t)
-
 | _ => true
 
 
@@ -57,7 +51,7 @@ open Sorted
 
 lemma sort_nil : Sorted [] := by rw [Sorted]; simp
 
-lemma sort_tail : Sorted (h :: t) → Sorted t := by
+lemma sort_tail : (∀ h t), Sorted (h :: t) → Sorted t := by
   intro hyp
   induction t with
   | nil => rw [Sorted]; simp
@@ -240,7 +234,7 @@ lemma head_sorted_min : ∀ h t, Sorted (h :: t) → ∀ x ∈ t, h ≤ x := by
 
         . -- have _ : ∀ x ∈ t', h' ≤ x := by apply head_sorted_min h' t' hypS.right
 
-          sorry
+          exact hypS.right
 
         . apply hypMem
 
@@ -287,7 +281,8 @@ lemma sorted_insert_into_sorted : ∀ a l, Sorted l → Sorted (insert_into_sort
 
             -- This should be easy to show but I cannot get lean to acknowledge that h' = a in base case
 
-            | nil => rw [insert_into_sorted] at hyp'; simp; sorry
+            | nil => rw [insert_into_sorted] at hyp'; simp; rw [List.cons_eq_cons, eq_comm] at hyp'; exact hyp'.left
+
 
             | cons h'' t'' _ =>
 
@@ -315,7 +310,6 @@ lemma sorted_insert_into_sorted : ∀ a l, Sorted l → Sorted (insert_into_sort
 
 
 -- Finally this gives us a super short and easy proof of the sortedness of the alg
-
 theorem sorted_insertion_sort : ∀l, Sorted (insertion_sort l) := by
   intro l
   induction l with
@@ -329,93 +323,5 @@ theorem sorted_insertion_sort : ∀l, Sorted (insertion_sort l) := by
 -- Finally we can claim that insertion is in fact a sorting algorithm
 
 theorem insertion_sort_correct : is_sorting_algorithm insertion_sort := by
-
   intro l
-
   exact ⟨perm_insertion_sort l, sorted_insertion_sort l⟩
-
-
---
-
--- MERGE SORT
-
---
-
-
--- Splits a list into two equal parts, or the left one is one  longer if length is uneven
-
-def split: List Int → (List Int × List Int)
-
-  | [] => ([], [])
-
-  | [x] => ([x], [])
-
-  | f :: s :: t => let (l, r) := split t; (f :: l, s :: r)
-
-
--- Merges two sorted lists, again quite clean in functional programming
-
-def merge: List Int → List Int → List Int
-
-  | l, []  => l
-
-  | [], r  => r
-
-  | hl :: tl, hr :: tr => if hl ≤ hr
-
-                          then hl :: (merge tl (hr :: tr))
-
-                          else hr :: (merge tr (hl :: tl))
-
--- Get termination by tgat at least one of our input lists is decreasing, which is expressed by their sum
-
-termination_by tl tr => tl.length + tr.length
-
-
--- The merge sort algorithm. I couldn't figure out how to cleanly argue for
-
--- termination without sacrifcing the clean split function.
-
--- I'm also not sure how to handle the remaining typed goal either
-
-def merge_sort: List Int → List Int
-
-  | [] => []
-
-  | [x] => [x]
-
-  | (f :: s :: t) =>
-
-
-      let pair := split (f :: s :: t)
-
-
-      have left : (split (f :: s :: t)).1.length < t.length + 1 + 1 := by
-
-        induction t with
-
-        | nil => rw [split]; simp; rw [split]; simp
-
-        | cons thrd t' ih =>
-
-            rw [split]; simp
-
-            have swap : t'.length + 2 = t'.length + 1 + 1 := by simp
-
-            rw [swap]
-
-            have swap2 : (split (thrd :: t')).1.length ≤ (split (f :: s :: t')).1.length := by
-
-              sorry
-
-            apply lt_of_le_of_lt swap2 ih
-
-
-      merge (merge_sort pair.fst) (merge_sort pair.snd)
-
-termination_by t => t.length
-
-
--- Evidence that the function does in fact terminate
-
-#eval! merge_sort [4, 3, 2, 3, 7, 0]
