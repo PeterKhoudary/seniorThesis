@@ -129,24 +129,42 @@ theorem depth_le_size : ∀ t : BinTree, depth t ≤ size t := by
 section
 open List
 
-example (f : α → β) (xs : List α) : map f (tail xs) = tail (map f xs) := by
-  induction xs with
-  | nil => rw [tail, map, tail]
-  | cons a l _ => rw [tail, map, tail]
+-- example (f : α → β) (xs : List α) : map f (tail xs) = tail (map f xs) := by
+--   induction xs with
+--   | nil => rw [tail, map, tail]
+--   | cons a l _ => rw [tail, map, tail]
+
+-- You use these:
+-- #check nil_append
+-- #check cons_append
 
 def snoc : List α → α → List α
   | [], y => [y]
   | (x :: xs), y => x :: snoc xs y
-
--- You use these:
-#check nil_append
-#check cons_append
 
 -- 4C. Prove this.
 theorem snoc_eq_append (xs : List α) (y : α) : snoc xs y = xs ++ [y] := by
   induction xs with
   | nil => rw [snoc, nil_append]
   | cons a l ih => rw [snoc, cons_append, ih]
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 -- 4D. Prove this by induction.
 theorem map_snoc (f : α → β) (xs : List α) (y : α) : map f (snoc xs y) = snoc (map f xs) (f y) := by
