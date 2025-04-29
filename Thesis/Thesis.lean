@@ -1,15 +1,14 @@
 import Lean
 import Mathlib.Tactic
 
--- This file contains a implementation of the priority queue (PQ) interface using leftist heaps, with proofs of correctness for the operations.
+-- This file contains an efficient implementation of the priority queue (PQ) interface using leftist heaps, with proofs of correctness for each interface method.
 
 /-
-We define the PQ interface using the following operations:
-1. empty : create an empty PQ
-2. insert : insert a new element into the PQ
-3. deleteMin : remove the minimum element from the PQ (if the queue is not empty)
-4. meld : merge two PQs
-5. fromList : create a PQ from a list of (key, priority) pairs
+We define the PQ interface using the operations with implementation complexity as follows:
+1. empty : create an empty PQ in O(1)
+2. insert : insert a new (key, priority) pair into the PQ a in O(log |a|)
+3. deleteMin : remove the minimum element from the PQ a in O(log |a|)
+4. meld : merge PQ a and PQ b in O(log |a| + log |b|)
 -/
 
 /-
@@ -23,33 +22,46 @@ For comprehensive details on leftist heaps (and their advantages over other impl
 https://www.cs.cmu.edu/~15210/docs/book.pdf
 -/
 
-
-
--- Inductive definition of a leftist heap
+/-
+Inductive definition of a leftist heap, where we only allow integer priorities
+  Note that even though the definition of rank is recursive, we store it in the node so we don't have to recalculate it every time we need it
+  We'll need this to get the desired time bounds on the operations
+-/
 inductive leftistHeap (β : Type) where
 | leaf
 | node (left : leftistHeap β) (key : β) (priority : Int) (rank : Nat) (right : leftistHeap β)
+deriving Repr
 
 namespace leftistHeap
 
-def size {β : Type} : leftistHeap β → Nat
-  | leaf => 0
-  | node left _ _ _ right => size left + size right + 1
-
+-- Leftist heap internal methods
 def rank {β : Type} : leftistHeap β → Nat
   | leaf => 0
   | node _ _ _ r _ => r
 
+def singleton {β : Type} (key : β) (priority : Int) : leftistHeap β :=
+  node leaf key priority 1 leaf
+
+/-
+Given two leftist heaps a b, and a key and priority, creates a new leftist heap such that the leftist property is preserved locally
+That is, it sets the one with greater rank as the left child and updates rank accordingly
+-/
 def mkLeftistNode {β : Type} (left : leftistHeap β) (key : β) (priority : Int) (right : leftistHeap β) : leftistHeap β :=
   if rank left < rank right
   then node right key priority (rank left + 1) left
   else node left key priority (rank right + 1) right
 
-def empty {β : Type} : leftistHeap β := leaf
+-- PQ INTERFACE METHODS
+def empty (β : Type) : leftistHeap β := leaf
 
-def singleton {β : Type} (key : β) (priority : Int) : leftistHeap β :=
-  node leaf key priority 1 leaf
+/-
+Merges two leftist heaps such that they maintain their validity.
+Observe that we only ever recurse along the right spine of a given heap, and
+since we do constant work locally, this is O(rank a + rank b).
 
+We'll show later that given an arbitrary valid leftist heap h, O(rank h) = O(log |h|).
+Therefore this operation is O(log |a| + log |b|).
+-/
 def meld {β : Type} : leftistHeap β → leftistHeap β → leftistHeap β
   | leaf, b => b
   | a, leaf => a
@@ -58,18 +70,23 @@ def meld {β : Type} : leftistHeap β → leftistHeap β → leftistHeap β
     then mkLeftistNode la ka pa (meld ra (node lb kb pb rkb rb))
     else mkLeftistNode lb kb pb (meld (node la ka pa rka ra) rb)
 
+/-
+Inserts a new (key, priority) pair into the heap by using meld
+This is O(log |h|), as we take the time bounds from meld
+-/
 def insert {β : Type} (h : leftistHeap β) (key : β) (priority : Int) : leftistHeap β :=
   meld h (singleton key priority)
 
+/-
+Returns the minimum element of the heap and the new heap after removing it
+This is O(log |h|), as we take the time bounds from meld where each subheap has rank upper bounded by the rank of the original heap
+-/
 def deleteMin {β : Type} (h : leftistHeap β) : Option (β × Int) × leftistHeap β :=
   match h with
-  | leaf => (none, leaf)
+  | leaf => (none, h)
   | node left key priority _ right => ((key, priority), meld left right)
 
-def fromList {β : Type} (l : List (β × Int)) : leftistHeap β :=
-  l.foldl (fun acc (key, priority) => insert acc key priority) empty
-
--- Predicates over leftist heaps
+-- VALIDITY PREDICATES
 
 -- A heap is a forAllHeap if some property holds for all nodes in the heap
 inductive forAllHeap {β : Type} (p : β → Int → Prop) : leftistHeap β → Prop
@@ -90,53 +107,28 @@ inductive minHeap {β : Type} : leftistHeap β → Prop
     minHeap right → -- property also holds for right subheap
     minHeap (node left key priority rank right)
 
+-- A heap satisfies the leftist property if for every node, the rank of the left child is greater than or equal to the rank of the right child
 inductive leftistProperty {β : Type} : leftistHeap β → Prop
 | leaf : leftistProperty leaf
 | node left key priority rk right :
-    rank right ≤ rank left →
-    leftistProperty left →
-    leftistProperty right →
+    rank right ≤ rank left → -- property holds for my direct children
+    leftistProperty left → -- property holds for the left subheap
+    leftistProperty right → -- property holds for the right subheap
     leftistProperty (node left key priority rk right)
 
--- The defintion of a valid leftist heap and some lemmas relating to it
--- A valid leftist heap satisfies the min heap property and the leftist property
+-- Finally, we define a leftist heap as valid if it satisfies the min heap property and the leftist property
 def validLeftistHeap {β : Type} (h : leftistHeap β) := minHeap h ∧ leftistProperty h
 
-lemma validMinHeap {β : Type} (h : leftistHeap β) : validLeftistHeap h → minHeap h := by
-  intro h'
-  exact h'.left
+-- PROOF OF CORRECTNESS PART 1 : ALL OPERATIONS PRESERVE THE VALID LEFTIST HEAP PROPERTY
+/-
+Observe that an empty heap is trivially valid. Since all PQs would only be built
+from applying meld, insert, and deleteMin to an intially empty PQ, we need to show
+that these operations preserve the validity of the heaps they operate on to show
+that our overall implementation is correct.
 
-lemma validLeftistProperty {β : Type} (h : leftistHeap β) : validLeftistHeap h → leftistProperty h := by
-  intro h'
-  exact h'.right
-
-lemma validLeft {β : Type} (left right : leftistHeap β) (key : β) (priority : Int) (rank : Nat) :
-  validLeftistHeap (node left key priority rank right) → validLeftistHeap left := by
-  intro h
-  rcases h with ⟨h1, h2⟩
-  have leftistLeft : leftistProperty left := by
-    rcases h2 with ⟨h3, h4, h5⟩
-    trivial
-
-  have minLeft : minHeap left := by
-    rcases h1 with ⟨h6, h7, h8, h9⟩
-    trivial
-
-  exact ⟨minLeft, leftistLeft⟩
-
-lemma validRight {β : Type} (left right : leftistHeap β) (key : β) (priority : Int) (rank : Nat) :
-  validLeftistHeap (node left key priority rank right) → validLeftistHeap right := by
-  intro h
-  rcases h with ⟨h1, h2⟩
-  have leftistRight : leftistProperty right := by
-    rcases h2 with ⟨h3, h4, h5⟩
-    trivial
-
-  have minRight : minHeap right := by
-    rcases h1 with ⟨h6, h7, h8, h9⟩
-    trivial
-
-  exact ⟨minRight, leftistRight⟩
+Furthermore, since we implement deleteMin and insert using meld, it suffices to show
+that meld is correct, then we trivially can show that insert and deleteMin are correct.
+-/
 
 -- ForAllHeap helper lemmas
 lemma parentPredicate : ∀ (β : Type) (p : β → Int → Prop) (left right : leftistHeap β) (key : β) (priority : Int) (rank : Nat),
@@ -329,9 +321,10 @@ lemma leftLessThan : ∀ (β : Type) (left right : leftistHeap β) (key : β) (p
 lemma singleton_minHeap : ∀ (β : Type) (key : β) (priority : Int),
   minHeap (singleton key priority) := by
   intro β key priority
+  rw [singleton]
   apply minHeap.node
-  . apply forAllHeap.leaf
-  . apply forAllHeap.leaf
+  . exact forAllHeap.leaf
+  . exact forAllHeap.leaf
   . apply minHeap.leaf
   . apply minHeap.leaf
 
@@ -355,9 +348,104 @@ lemma minHeapForAllHeap : ∀ (β : Type) (left right : leftistHeap β) (key : �
   . apply minHeapLeftForAllHeap β left right key priority rank h
   . apply minHeapRightForAllHeap β left right key priority rank h
 
--- Proof meld preserves the min heap property
--- First, we require a sub-proof to show that forAllHeap is preserved when melding two minheaps
-theorem meldForAllHeap : ∀ (β : Type) (priority : Int) (a b : leftistHeap β),
+-- Leftist property helper lemmas
+lemma singleton_leftistProperty : ∀ (β : Type) (key : β) (priority : Int),
+  leftistProperty (singleton key priority) := by
+  intro β key priority
+  apply leftistProperty.node
+  . trivial
+  . exact leftistProperty.leaf
+  . exact leftistProperty.leaf
+
+lemma rightLeftistProperty : ∀ (β : Type) (left right : leftistHeap β) (key : β) (priority : Int) (rk : ℕ),
+  leftistProperty (node left key priority rk right) → leftistProperty right := by
+  intro β left right key priority rk h
+  cases h
+  trivial
+
+lemma leftLeftistProperty : ∀ (β : Type) (left right : leftistHeap β) (key : β) (priority : Int) (rk : ℕ),
+  leftistProperty (node left key priority rk right) → leftistProperty left := by
+  intro β left right key priority rk h
+  cases h
+  trivial
+
+lemma mkLeftistLeftistProperty : ∀ (β : Type) (a b : leftistHeap β) (key : β) (priority : Int),
+  leftistProperty a ∧ leftistProperty b ↔ leftistProperty (mkLeftistNode a key priority b) := by
+  intro β a b key priority
+  constructor
+  . intro h
+    rcases h with ⟨hA, hB⟩
+    rw [mkLeftistNode]
+    split_ifs with hRank
+    . apply leftistProperty.node
+      . exact le_of_lt hRank
+      . exact hB
+      . exact hA
+    . apply leftistProperty.node
+      . rw [not_lt] at hRank
+        exact hRank
+      . exact hA
+      . exact hB
+  . intro h
+    rw [mkLeftistNode] at h
+    split at h
+    . constructor
+      . exact rightLeftistProperty β b a key priority ((a.rank) + 1) h
+      . exact leftLeftistProperty β b a key priority ((a.rank) + 1) h
+    . constructor
+      . exact leftLeftistProperty β a b key priority ((b.rank) + 1) h
+      . exact rightLeftistProperty β a b key priority ((b.rank) + 1) h
+
+-- Validity helper lemmas
+lemma validMinHeap {β : Type} (h : leftistHeap β) : validLeftistHeap h → minHeap h := by
+  intro h'
+  exact h'.left
+
+lemma validLeftistProperty {β : Type} (h : leftistHeap β) : validLeftistHeap h → leftistProperty h := by
+  intro h'
+  exact h'.right
+
+lemma validLeft {β : Type} (left right : leftistHeap β) (key : β) (priority : Int) (rank : Nat) :
+  validLeftistHeap (node left key priority rank right) → validLeftistHeap left := by
+  intro h
+  rcases h with ⟨h1, h2⟩
+  have leftistLeft : leftistProperty left := by
+    rcases h2 with ⟨h3, h4, h5⟩
+    trivial
+
+  have minLeft : minHeap left := by
+    rcases h1 with ⟨h6, h7, h8, h9⟩
+    trivial
+
+  exact ⟨minLeft, leftistLeft⟩
+
+lemma validRight {β : Type} (left right : leftistHeap β) (key : β) (priority : Int) (rank : Nat) :
+  validLeftistHeap (node left key priority rank right) → validLeftistHeap right := by
+  intro h
+  rcases h with ⟨h1, h2⟩
+  have leftistRight : leftistProperty right := by
+    rcases h2 with ⟨h3, h4, h5⟩
+    trivial
+
+  have minRight : minHeap right := by
+    rcases h1 with ⟨h6, h7, h8, h9⟩
+    trivial
+
+  exact ⟨minRight, leftistRight⟩
+
+lemma singleton_valid {β : Type} (key : β) (priority : Int) :
+  validLeftistHeap (singleton key priority) := by
+  rw [validLeftistHeap, singleton]
+  constructor
+  . apply minHeap.node
+    . exact forAllHeap.leaf
+    . exact forAllHeap.leaf
+    . apply minHeap.leaf
+    . apply minHeap.leaf
+  . exact singleton_leftistProperty _ key priority
+
+-- To prove that meld maintains the min heap property, we need the subproof below
+lemma meldForAllHeap : ∀ (β : Type) (priority : Int) (a b : leftistHeap β),
   minHeap a → minHeap b →
   forAllHeap (fun _ pA ↦ priority ≤ pA) a → forAllHeap (fun _ pB ↦ priority ≤ pB) b →
   forAllHeap (fun _ pAB ↦ priority ≤ pAB) (meld a b) := by
@@ -500,6 +588,7 @@ theorem meldForAllHeap : ∀ (β : Type) (priority : Int) (a b : leftistHeap β)
                         apply mkLeftistForAll β (fun _ pB ↦ priority ≤ pB) lb ((node lra kra pra rkra rra).meld rb) kb pb hrab
                       exact bothForAll.right
 
+-- Proof that meld maintains the minHeap property
 theorem meld_minHeap : ∀ (β : Type) (a b : leftistHeap β),
   validLeftistHeap a → validLeftistHeap b → minHeap (meld a b) := by
   intro β a b hvA hvB
@@ -671,56 +760,8 @@ theorem meld_minHeap : ∀ (β : Type) (a b : leftistHeap β),
                         apply mkLeftistMinHeap β lb ((node lra kra pra rkra rra).meld rb) kb pb hrab
                       exact bothForAll.right
 
--- Leftist property helper lemmas
-lemma singleton_leftistProperty : ∀ (β : Type) (key : β) (priority : Int),
-  leftistProperty (singleton key priority) := by
-  intro β key priority
-  apply leftistProperty.node
-  . simp
-  . apply leftistProperty.leaf
-  . apply leftistProperty.leaf
-
-lemma rightLeftistProperty : ∀ (β : Type) (left right : leftistHeap β) (key : β) (priority : Int) (rk : ℕ),
-  leftistProperty (node left key priority rk right) → leftistProperty right := by
-  intro β left right key priority rk h
-  cases h
-  trivial
-
-lemma leftLeftistProperty : ∀ (β : Type) (left right : leftistHeap β) (key : β) (priority : Int) (rk : ℕ),
-  leftistProperty (node left key priority rk right) → leftistProperty left := by
-  intro β left right key priority rk h
-  cases h
-  trivial
-
-lemma mkLeftistLeftistProperty : ∀ (β : Type) (a b : leftistHeap β) (key : β) (priority : Int),
-  leftistProperty a ∧ leftistProperty b ↔ leftistProperty (mkLeftistNode a key priority b) := by
-  intro β a b key priority
-  constructor
-  . intro h
-    rcases h with ⟨hA, hB⟩
-    rw [mkLeftistNode]
-    split_ifs with hRank
-    . apply leftistProperty.node
-      . exact le_of_lt hRank
-      . exact hB
-      . exact hA
-    . apply leftistProperty.node
-      . rw [not_lt] at hRank
-        exact hRank
-      . exact hA
-      . exact hB
-  . intro h
-    rw [mkLeftistNode] at h
-    split at h
-    . constructor
-      . exact rightLeftistProperty β b a key priority ((a.rank) + 1) h
-      . exact leftLeftistProperty β b a key priority ((a.rank) + 1) h
-    . constructor
-      . exact leftLeftistProperty β a b key priority ((b.rank) + 1) h
-      . exact rightLeftistProperty β a b key priority ((b.rank) + 1) h
-
 -- Proof meld preserves the leftist property
-theorem meldLeftist {β : Type} (a b : leftistHeap β) :
+theorem meldLeftistProperty {β : Type} (a b : leftistHeap β) :
   validLeftistHeap a →
   validLeftistHeap b →
   leftistProperty (meld a b) := by
@@ -862,8 +903,14 @@ theorem meldLeftist {β : Type} (a b : leftistHeap β) :
                       rw [← mkLeftistLeftistProperty] at hrab
                       exact hrab.right
 
--- Finally, proof that meld preserves the validity of leftist heaps
-theorem meld_validLeftistHeap : ∀ (β : Type) (a b : leftistHeap β),
+-- Given all these lemmas, we can now prove that the the entire interface respects validity
+theorem empty_valid {β : Type} : validLeftistHeap (empty β) := by
+  rw [validLeftistHeap]
+  constructor
+  . apply minHeap.leaf
+  . apply leftistProperty.leaf
+
+theorem meld_valid : ∀ (β : Type) (a b : leftistHeap β),
   validLeftistHeap a → validLeftistHeap b → validLeftistHeap (meld a b) := by
   intro β a b hvA hvB
   rw [validLeftistHeap]
@@ -871,23 +918,75 @@ theorem meld_validLeftistHeap : ∀ (β : Type) (a b : leftistHeap β),
   . apply meld_minHeap
     . exact hvA
     . exact hvB
-  . apply meldLeftist
+  . apply meldLeftistProperty
     . exact hvA
     . exact hvB
 
--- Proof of the leftist rank theorem, that the rank of the root is logarithmic in the number of nodes
--- But first, some definitions and lemmas
+theorem insert_valid : ∀ (β : Type) (h : leftistHeap β) (key : β) (priority : Int) ,
+  validLeftistHeap h → validLeftistHeap (insert h key priority) := by
+  intro β h key priority hv
+  rw [insert]
+  apply meld_valid
+  . exact hv
+  . exact singleton_valid key priority
 
--- In the implementation, we store rank as a field of the node, so we can use it directly
--- But this does not actually capture the meaning of rank, and is unhelpful in proofs
--- So here we define the rank recursively, and claim as axiom that is equal to the rank stored in the node
+theorem deleteMin_valid : ∀ (β : Type) (a : leftistHeap β),
+  validLeftistHeap a → ∀ (pair : Option (β × Int)) (a' : leftistHeap β ), (pair, a') = deleteMin a → validLeftistHeap a' := by
+  intro β a h pair a' h'
+  rw [deleteMin.eq_def] at h'
+  cases a with
+  | leaf =>
+      simp at h'
+      rw [h'.right, validLeftistHeap]
+      constructor
+      . exact minHeap.leaf
+      . exact leftistProperty.leaf
+
+  | node l k p rk r =>
+      have hl : validLeftistHeap l := by apply validLeft l r k p rk h
+      have hr : validLeftistHeap r := by apply validRight l r k p rk h
+
+      simp at h'
+      rw [h'.right]
+      apply meld_valid
+      . exact hl
+      . exact hr
+
+-- PROOF OF CORRECTNESS PART 2: COMPUTATIONAL COMPLEXITY
+/-
+We get the desired time bounds on all operations by arguing that for a given
+valid leftist heap h , the rank of the heap is bounded by log2(size h + 1).
+
+We show this holds, then reference the comments on all interface operations for a brief
+explanation of how this gives us the desired time bounds.
+-/
+
+-- The size of a leftist heap is defined the same as the size of a binary tree
+def size {β : Type} : leftistHeap β → Nat
+  | leaf => 0
+  | node left _ _ _ right => size left + size right + 1
+
+/-
+The rank of a heap is the length of its right spine. In our actual implementation,
+we store the rank of a node in the actual heap. We do this so that way mkLeftistNode
+is constant time, and that we don't have to recompute it each time, which would put us
+severely out of time bounds. We define it recursively beneath as that defintion
+lends itself to actually proving the rank bound, and then take as an axiom that
+the this defintion is equal to the rank stored in the heap.
+
+FOR JEREMY, I realize taking it as axiom is sketchy, but I'm not super sure
+how I could show that this is the case.
+-/
 def recursiveRank {β : Type} : leftistHeap β → ℕ
   | leaf => 0
   | node _ _ _ _ right => 1 + recursiveRank right
 
 axiom rankEqRecursive : ∀ (β : Type) (a : leftistHeap β), rank a = recursiveRank a
 
--- To show the bounded rank lemma, it
+/-
+Lemma that a leftist heap with rank r has size at least 2^r - 1.
+This makes proving the actual bound significantly easier
+-/
 lemma rankEntries {β : Type} : ∀ (a : leftistHeap β),
   validLeftistHeap a → size a ≥ 2 ^ (rank a) - 1 := by
   intro a h
@@ -896,7 +995,7 @@ lemma rankEntries {β : Type} : ∀ (a : leftistHeap β),
       rw [size, rankEqRecursive, recursiveRank]
       simp
   | node l k p rk r ihL ihR =>
-      rw [size, rankEqRecursive, recursiveRank]
+      rw [size, rankEqRecursive , recursiveRank]
       rw [rankEqRecursive] at ihL ihR
 
       have ihL : size l ≥ 2 ^ (recursiveRank l) - 1 := by apply ihL (validLeft l r k p rk h)
@@ -942,8 +1041,12 @@ lemma rankEntries {β : Type} : ∀ (a : leftistHeap β),
       . exact leftGe
       . exact rightGe
 
--- The bounded rank theorem follows directly from the previous lemma
-theorem boundedRank {β : Type} : ∀ (a : leftistHeap β),
+/-
+The leftist rank lemma abuses the leftist property to show that the rank of a leftist heap
+is logarithmic with respect to the number of nodes. Given that this is true, we get
+desired time bounds on all operations.
+-/
+theorem leftistRank {β : Type} : ∀ (a : leftistHeap β),
   validLeftistHeap a → rank a ≤ Nat.log2 (size a + 1) := by
   intro a h
   rw [Nat.le_log2, ← tsub_le_iff_right]
