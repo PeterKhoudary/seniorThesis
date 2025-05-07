@@ -1,33 +1,67 @@
 import Lean
 import Mathlib.Tactic
 
--- THIS FILE IS DEPRECATED LOOK AT THESIS.LEAN FOR THE UP TO DATE VERSION
+-- This file contains an efficient implementation of the priority queue (PQ) interface using leftist heaps, with proofs of correctness for each interface method.
 
--- Leftist heap definition and methods
+/-
+We define the PQ interface using the operations with implementation complexity as follows:
+1. empty : create an empty PQ in O(1)
+2. insert : insert a new (key, priority) pair into the PQ a in O(log |a|)
+3. deleteMin : remove the minimum element from the PQ a in O(log |a|)
+4. meld : merge PQ a and PQ b in O(log |a| + log |b|)
+-/
+
+/-
+A valid leftist heap is a binary tree that satisfies the following properties:
+1. The min heap property: for every node, the priority of the node is less than or equal to the priorities of all its descendants
+
+2. The leftist property: for every node, the rank of the left child is greater than or equal to the rank of the right child where
+   the rank of a node is defined as the length of the right spine of the subtree rooted at that node
+
+For comprehensive details on leftist heaps (and their advantages over other implementations), see part XI of the CMU 15-210 course textbook by Umut Acar and Guy Blelloch
+https://www.cs.cmu.edu/~15210/docs/book.pdf
+-/
+
+/-
+Inductive definition of a leftist heap, where we only allow integer priorities
+  Note that even though the definition of rank is recursive, we store it in the node so we don't have to recalculate it every time we need it
+  We'll need this to get the desired time bounds on the operations
+-/
 inductive leftistHeap (β : Type) where
 | leaf
-| node (left : leftistHeap β) (key  : β) (priority : Int) (rank : Nat) (right : leftistHeap β)
+| node (left : leftistHeap β) (key : β) (priority : Int) (rank : Nat) (right : leftistHeap β)
 deriving Repr
 
 namespace leftistHeap
-open leftistHeap
 
-def size {β : Type} : leftistHeap β → Nat
-  | leaf => 0
-  | node left _ _ _ right => size left + size right + 1
-
+-- Leftist heap internal methods
 def rank {β : Type} : leftistHeap β → Nat
   | leaf => 0
   | node _ _ _ r _ => r
 
+def singleton {β : Type} (key : β) (priority : Int) : leftistHeap β :=
+  node leaf key priority 1 leaf
+
+/-
+Given two leftist heaps a b, and a key and priority, creates a new leftist heap such that the leftist property is preserved locally
+That is, it sets the one with greater rank as the left child and updates rank accordingly
+-/
 def mkLeftistNode {β : Type} (left : leftistHeap β) (key : β) (priority : Int) (right : leftistHeap β) : leftistHeap β :=
   if rank left < rank right
   then node right key priority (rank left + 1) left
   else node left key priority (rank right + 1) right
 
-def singleton {β : Type} (key : β) (priority : Int): leftistHeap β :=
-  node leaf key priority 1 leaf
+-- PQ INTERFACE METHODS
+def empty (β : Type) : leftistHeap β := leaf
 
+/-
+Merges two leftist heaps such that they maintain their validity.
+Observe that we only ever recurse along the right spine of a given heap, and
+since we do constant work locally, this is O(rank a + rank b).
+
+We'll show later that given an arbitrary valid leftist heap h, O(rank h) = O(log |h|).
+Therefore this operation is O(log |a| + log |b|).
+-/
 def meld {β : Type} : leftistHeap β → leftistHeap β → leftistHeap β
   | leaf, b => b
   | a, leaf => a
@@ -36,24 +70,67 @@ def meld {β : Type} : leftistHeap β → leftistHeap β → leftistHeap β
     then mkLeftistNode la ka pa (meld ra (node lb kb pb rkb rb))
     else mkLeftistNode lb kb pb (meld (node la ka pa rka ra) rb)
 
-def insertLeftist {β : Type} (h : leftistHeap β) (key : β) (priority : Int) : leftistHeap β :=
+/-
+Inserts a new (key, priority) pair into the heap by using meld
+This is O(log |h|), as we take the time bounds from meld
+-/
+def insert {β : Type} (h : leftistHeap β) (key : β) (priority : Int) : leftistHeap β :=
   meld h (singleton key priority)
 
-def deleteMinLeftist {β : Type} (h : leftistHeap β) : Option (β × Int) × leftistHeap β :=
+/-
+Returns the minimum element of the heap and the new heap after removing it
+This is O(log |h|), as we take the time bounds from meld where each subheap has rank upper bounded by the rank of the original heap
+-/
+def deleteMin {β : Type} (h : leftistHeap β) : Option (β × Int) × leftistHeap β :=
   match h with
-  | leaf => (none, leaf)
+  | leaf => (none, h)
   | node left key priority _ right => ((key, priority), meld left right)
 
+-- VALIDITY PREDICATES
 
--- ForAllHeap predicate and lemmas
+-- A heap is a forAllHeap if some property holds for all nodes in the heap
 inductive forAllHeap {β : Type} (p : β → Int → Prop) : leftistHeap β → Prop
 | leaf : forAllHeap p leaf
 | node left key priority rank right :
-    p key priority →
-    forAllHeap p left →
-    forAllHeap p right →
+    p key priority → -- the property holds locally
+    forAllHeap p left → -- the property holds for all nodes in the left subheap
+    forAllHeap p right → -- the property holds for all nodes in the right subheap
     forAllHeap p (node left key priority rank right)
 
+-- A heap is a min heap if at every node, the priority of the node is less than or equal to the priority of its children
+inductive minHeap {β : Type} : leftistHeap β → Prop
+| leaf : minHeap leaf
+| node left key priority rank right:
+    forAllHeap (fun _ pL => priority ≤ pL) left → -- all nodes in left subheap have priority greater than or equal to the node
+    forAllHeap (fun _ pR => priority ≤ pR) right → -- all nodes in right subheap have priority greater than or equal to the node
+    minHeap left → -- property also holds for left subheap
+    minHeap right → -- property also holds for right subheap
+    minHeap (node left key priority rank right)
+
+-- A heap satisfies the leftist property if for every node, the rank of the left child is greater than or equal to the rank of the right child
+inductive leftistProperty {β : Type} : leftistHeap β → Prop
+| leaf : leftistProperty leaf
+| node left key priority rk right :
+    rank right ≤ rank left → -- property holds for my direct children
+    leftistProperty left → -- property holds for the left subheap
+    leftistProperty right → -- property holds for the right subheap
+    leftistProperty (node left key priority rk right)
+
+-- Finally, we define a leftist heap as valid if it satisfies the min heap property and the leftist property
+def validLeftistHeap {β : Type} (h : leftistHeap β) := minHeap h ∧ leftistProperty h
+
+-- PROOF OF CORRECTNESS PART 1 : ALL OPERATIONS PRESERVE THE VALID LEFTIST HEAP PROPERTY
+/-
+Observe that an empty heap is trivially valid. Since all PQs would only be built
+from applying meld, insert, and deleteMin to an intially empty PQ, we need to show
+that these operations preserve the validity of the heaps they operate on to show
+that our overall implementation is correct.
+
+Furthermore, since we implement deleteMin and insert using meld, it suffices to show
+that meld is correct, then we trivially can show that insert and deleteMin are correct.
+-/
+
+-- ForAllHeap helper lemmas
 lemma parentPredicate : ∀ (β : Type) (p : β → Int → Prop) (left right : leftistHeap β) (key : β) (priority : Int) (rank : Nat),
   forAllHeap p (node left key priority rank right) → p key priority := by
     intro β p left right key priority rank h
@@ -72,7 +149,7 @@ lemma rightForAllHeap : ∀ (β : Type) (p : β → Int → Prop) (left right : 
     rcases h with ⟨h1, h2, h3⟩
     trivial
 
-theorem leftLessThanHeap : ∀ (β : Type) (left right : leftistHeap β) (key : β) (priority localPriority newPriority : Int) (rank : Nat),
+lemma leftLessThanHeap : ∀ (β : Type) (left right : leftistHeap β) (key : β) (priority localPriority newPriority : Int) (rank : Nat),
   forAllHeap (fun _ p => priority ≤ p) (node left key localPriority rank right) → newPriority ≤ priority → forAllHeap (fun _ pL => newPriority ≤ pL) left := by
   intro β left right key priority localPriority newPriority rank h hPP
   induction left with
@@ -96,7 +173,7 @@ theorem leftLessThanHeap : ∀ (β : Type) (left right : leftistHeap β) (key : 
           . exact rightForAllHeap β (fun _ pL => priority ≤ pL) lLeft lRight lKey lPriority lRank lol
           . exact rightForAllHeap β (fun _ pL => priority ≤ pL) (node lLeft lKey lPriority lRank lRight) right key localPriority rank h
 
-theorem rightLessThanHeap : ∀ (β : Type) (left right : leftistHeap β) (key : β) (priority localPriority newPriority : Int) (rank : Nat),
+lemma rightLessThanHeap : ∀ (β : Type) (left right : leftistHeap β) (key : β) (priority localPriority newPriority : Int) (rank : Nat),
   forAllHeap (fun _ p => priority ≤ p) (node left key localPriority rank right) → newPriority ≤ priority → forAllHeap (fun _ pL => newPriority ≤ pL) right := by
   intro β left right key priority localPriority newPriority rank h hPP
   induction right with
@@ -133,41 +210,46 @@ def mkLeftistForAll : ∀ (β : Type) (p : β → Int → Prop) (left right : le
       . exact leftForAllHeap β p left right key priority ((right.rank) + 1) h
       . exact rightForAllHeap β p left right key priority ((right.rank) + 1) h
 
--- Minheap predicate and lemmas
-inductive minHeap {β : Type} : leftistHeap β → Prop
-| leaf : minHeap leaf
-| node left key priority rank right:
-    forAllHeap (fun _ pL => priority ≤ pL) left →
-    forAllHeap (fun _ pR => priority ≤ pR) right →
-    minHeap left →
-    minHeap right →
-    minHeap (node left key priority rank right)
+lemma smallForAllHeap : ∀ (β : Type) (oldPriority newPriority: Int) (h : leftistHeap β),
+  forAllHeap (fun _ pH ↦ oldPriority ≤ pH) h → newPriority ≤ oldPriority →  forAllHeap (fun _ pH ↦ newPriority ≤ pH) h := by
+  intro β oldPriority newPriority h hP hPP
+  induction h with
+  | leaf =>
+      apply forAllHeap.leaf
+  | node left key priority rank right ihL ihR =>
+      apply forAllHeap.node
+      . apply le_trans
+        . apply hPP
+        . apply parentPredicate β _ left right key priority rank hP
+      . apply ihL (leftForAllHeap β (fun _ pH ↦ oldPriority ≤ pH) left right key priority rank hP)
+      . apply ihR (rightForAllHeap β (fun _ pH ↦ oldPriority ≤ pH) left right key priority rank hP)
 
-theorem minHeapLeftForAllHeap : ∀ (β : Type) (left right : leftistHeap β) (key : β) (priority : Int) (rank : Nat),
+-- Minheap helper lemmas
+lemma minHeapLeftForAllHeap : ∀ (β : Type) (left right : leftistHeap β) (key : β) (priority : Int) (rank : Nat),
   minHeap (node left key priority rank right) → forAllHeap (fun _ pL => priority ≤ pL) left := by
   intro β left right key priority rank h
   cases h
   trivial
 
-theorem minHeapRightForAllHeap : ∀ (β : Type) (left right : leftistHeap β) (key : β) (priority : Int) (rank : Nat),
+lemma minHeapRightForAllHeap : ∀ (β : Type) (left right : leftistHeap β) (key : β) (priority : Int) (rank : Nat),
   minHeap (node left key priority rank right) → forAllHeap (fun _ pR => priority ≤ pR) right := by
   intro β left right key priority rank h
   cases h
   trivial
 
-theorem leftMinHeap : ∀ (β : Type) (left right : leftistHeap β) (key : β) (priority : Int) (rank : Nat),
+lemma leftMinHeap : ∀ (β : Type) (left right : leftistHeap β) (key : β) (priority : Int) (rank : Nat),
   minHeap (node left key priority rank right) → minHeap left := by
   intro β left right key priority rank h
   cases h
   trivial
 
-theorem rightMinHeap : ∀ (β : Type) (left right : leftistHeap β) (key : β) (priority : Int) (rank : Nat),
+lemma rightMinHeap : ∀ (β : Type) (left right : leftistHeap β) (key : β) (priority : Int) (rank : Nat),
   minHeap (node left key priority rank right) → minHeap right := by
   intro β left right key priority rank h
   cases h
   trivial
 
-theorem rightLessThan : ∀ (β : Type) (left right : leftistHeap β) (key : β) (priority newPriority : Int) (rank : Nat),
+lemma rightLessThan : ∀ (β : Type) (left right : leftistHeap β) (key : β) (priority newPriority : Int) (rank : Nat),
   minHeap (node left key priority rank right) → newPriority ≤ priority → forAllHeap (fun _ pR => newPriority ≤ pR) right := by
   intro β left right key priority newPriority rank h hPP
   induction right with
@@ -205,7 +287,7 @@ theorem rightLessThan : ∀ (β : Type) (left right : leftistHeap β) (key : β)
         . apply rightMinHeap β rLeft rRight rKey rPriority rRank
           exact rightMinHeap β left _ key priority rank h
 
-theorem leftLessThan : ∀ (β : Type) (left right : leftistHeap β) (key : β) (priority newPriority : Int) (rank : Nat),
+lemma leftLessThan : ∀ (β : Type) (left right : leftistHeap β) (key : β) (priority newPriority : Int) (rank : Nat),
   minHeap (node left key priority rank right) → newPriority ≤ priority → forAllHeap (fun _ pL => newPriority ≤ pL) left := by
   intro β left right key priority newPriority rank h hPP
   induction left with
@@ -236,12 +318,13 @@ theorem leftLessThan : ∀ (β : Type) (left right : leftistHeap β) (key : β) 
           exact leftMinHeap β (node lLeft lKey lPriority lRank lRight) right key priority rank h
         . exact rightMinHeap β (node lLeft lKey lPriority lRank lRight) right key priority rank h
 
-theorem singleton_minHeap : ∀ (β : Type) (key : β) (priority : Int),
+lemma singleton_minHeap : ∀ (β : Type) (key : β) (priority : Int),
   minHeap (singleton key priority) := by
   intro β key priority
+  rw [singleton]
   apply minHeap.node
-  . apply forAllHeap.leaf
-  . apply forAllHeap.leaf
+  . exact forAllHeap.leaf
+  . exact forAllHeap.leaf
   . apply minHeap.leaf
   . apply minHeap.leaf
 
@@ -257,6 +340,111 @@ lemma mkLeftistMinHeap : ∀ (β : Type) (left right : leftistHeap β) (key : β
     . exact leftMinHeap β left right key priority ((right.rank) + 1) h
     . exact rightMinHeap β left right key priority ((right.rank) + 1) h
 
+lemma minHeapForAllHeap : ∀ (β : Type) (left right : leftistHeap β) (key : β) (priority : Int) (rank : Nat),
+  minHeap (node left key priority rank right) → forAllHeap (fun _ pH ↦ priority ≤ pH) (node left key priority rank right) := by
+  intro β left right key priority rank h
+  apply forAllHeap.node
+  . trivial
+  . apply minHeapLeftForAllHeap β left right key priority rank h
+  . apply minHeapRightForAllHeap β left right key priority rank h
+
+-- Leftist property helper lemmas
+lemma singleton_leftistProperty : ∀ (β : Type) (key : β) (priority : Int),
+  leftistProperty (singleton key priority) := by
+  intro β key priority
+  apply leftistProperty.node
+  . trivial
+  . exact leftistProperty.leaf
+  . exact leftistProperty.leaf
+
+lemma rightLeftistProperty : ∀ (β : Type) (left right : leftistHeap β) (key : β) (priority : Int) (rk : ℕ),
+  leftistProperty (node left key priority rk right) → leftistProperty right := by
+  intro β left right key priority rk h
+  cases h
+  trivial
+
+lemma leftLeftistProperty : ∀ (β : Type) (left right : leftistHeap β) (key : β) (priority : Int) (rk : ℕ),
+  leftistProperty (node left key priority rk right) → leftistProperty left := by
+  intro β left right key priority rk h
+  cases h
+  trivial
+
+lemma mkLeftistLeftistProperty : ∀ (β : Type) (a b : leftistHeap β) (key : β) (priority : Int),
+  leftistProperty a ∧ leftistProperty b ↔ leftistProperty (mkLeftistNode a key priority b) := by
+  intro β a b key priority
+  constructor
+  . intro h
+    rcases h with ⟨hA, hB⟩
+    rw [mkLeftistNode]
+    split_ifs with hRank
+    . apply leftistProperty.node
+      . exact le_of_lt hRank
+      . exact hB
+      . exact hA
+    . apply leftistProperty.node
+      . rw [not_lt] at hRank
+        exact hRank
+      . exact hA
+      . exact hB
+  . intro h
+    rw [mkLeftistNode] at h
+    split at h
+    . constructor
+      . exact rightLeftistProperty β b a key priority ((a.rank) + 1) h
+      . exact leftLeftistProperty β b a key priority ((a.rank) + 1) h
+    . constructor
+      . exact leftLeftistProperty β a b key priority ((b.rank) + 1) h
+      . exact rightLeftistProperty β a b key priority ((b.rank) + 1) h
+
+-- Validity helper lemmas
+lemma validMinHeap {β : Type} (h : leftistHeap β) : validLeftistHeap h → minHeap h := by
+  intro h'
+  exact h'.left
+
+lemma validLeftistProperty {β : Type} (h : leftistHeap β) : validLeftistHeap h → leftistProperty h := by
+  intro h'
+  exact h'.right
+
+lemma validLeft {β : Type} (left right : leftistHeap β) (key : β) (priority : Int) (rank : Nat) :
+  validLeftistHeap (node left key priority rank right) → validLeftistHeap left := by
+  intro h
+  rcases h with ⟨h1, h2⟩
+  have leftistLeft : leftistProperty left := by
+    rcases h2 with ⟨h3, h4, h5⟩
+    trivial
+
+  have minLeft : minHeap left := by
+    rcases h1 with ⟨h6, h7, h8, h9⟩
+    trivial
+
+  exact ⟨minLeft, leftistLeft⟩
+
+lemma validRight {β : Type} (left right : leftistHeap β) (key : β) (priority : Int) (rank : Nat) :
+  validLeftistHeap (node left key priority rank right) → validLeftistHeap right := by
+  intro h
+  rcases h with ⟨h1, h2⟩
+  have leftistRight : leftistProperty right := by
+    rcases h2 with ⟨h3, h4, h5⟩
+    trivial
+
+  have minRight : minHeap right := by
+    rcases h1 with ⟨h6, h7, h8, h9⟩
+    trivial
+
+  exact ⟨minRight, leftistRight⟩
+
+lemma singleton_valid {β : Type} (key : β) (priority : Int) :
+  validLeftistHeap (singleton key priority) := by
+  rw [validLeftistHeap, singleton]
+  constructor
+  . apply minHeap.node
+    . exact forAllHeap.leaf
+    . exact forAllHeap.leaf
+    . apply minHeap.leaf
+    . apply minHeap.leaf
+  . exact singleton_leftistProperty _ key priority
+
+-- To prove that meld maintains the min heap property, we need the subproof below
 lemma meldForAllHeap : ∀ (β : Type) (priority : Int) (a b : leftistHeap β),
   minHeap a → minHeap b →
   forAllHeap (fun _ pA ↦ priority ≤ pA) a → forAllHeap (fun _ pB ↦ priority ≤ pB) b →
@@ -297,134 +485,74 @@ lemma meldForAllHeap : ∀ (β : Type) (priority : Int) (a b : leftistHeap β),
 
           . rw [mkLeftistNode]
             rw [not_lt] at hle
+
+            have hlarb : forAllHeap (fun x pAB ↦ priority ≤ pAB) ((la.node ka pa rka ra).meld rb) := by
+              apply ihRb
+              . apply rightMinHeap β lb rb kb pb rkb hBmin
+              . apply rightForAllHeap β (fun _ pB ↦ priority ≤ pB) lb rb kb pb rkb hB
+              . intro hLaMin hLa
+                have hlab : forAllHeap (fun _ pA ↦ priority ≤ pA) (la.meld (lb.node kb pb rkb rb)) := by apply ihLa hLaMin hLa
+                have hrB : forAllHeap (fun _ pB ↦ priority ≤ pB) rb := by apply rightForAllHeap β (fun _ pB ↦ priority ≤ pB) lb rb kb pb rkb hB
+                rw [meld.eq_def] at hlab
+                cases la with
+                | leaf =>
+                    rw [meld.eq_def]
+                    simp
+                    exact hrB
+                | node lla kla pla rkla rla =>
+                    have lPriority : ¬ pla < pb := by
+                      rw [not_lt]
+                      apply le_trans
+                      . apply hle
+                      . have lol : forAllHeap (fun _ pL => pa ≤ pL) (node lla kla pla rkla rla) := by
+                          apply minHeapLeftForAllHeap β (node lla kla pla rkla rla) ra ka pa rka hAmin
+                        apply parentPredicate β _ lla rla kla pla rkla lol
+
+                    simp [lPriority] at hlab
+                    have bothForAll : forAllHeap (fun _ pB ↦ priority ≤ pB) lb ∧ forAllHeap (fun _ pA ↦ priority ≤ pA) ((lla.node kla pla rkla rla).meld rb) := by
+                      apply mkLeftistForAll β (fun _ pB ↦ priority ≤ pB) lb ((lla.node kla pla rkla rla).meld rb) kb pb hlab
+                    exact bothForAll.right
+
+              . intro hRaMin hRa
+                have hrab : forAllHeap (fun _ pA ↦ priority ≤ pA) (ra.meld (lb.node kb pb rkb rb)) := by apply ihRa hRaMin hRa
+                have hrB : forAllHeap (fun _ pB ↦ priority ≤ pB) rb := by apply rightForAllHeap β (fun _ pB ↦ priority ≤ pB) lb rb kb pb rkb hB
+                rw [meld.eq_def] at hrab
+                cases ra with
+                | leaf =>
+                    rw [meld.eq_def]
+                    simp
+                    exact hrB
+                | node lra kra pra rkra rra =>
+                    have rPriority : ¬ pra < pb := by
+                      rw [not_lt]
+                      apply le_trans
+                      . apply hle
+                      . have lol : forAllHeap (fun _ pL => pa ≤ pL) (node lra kra pra rkra rra) := by
+                          apply minHeapRightForAllHeap β la (node lra kra pra rkra rra) ka pa rka hAmin
+                        apply parentPredicate β _ lra rra kra pra rkra lol
+
+                    simp [rPriority] at hrab
+                    have bothForAll : forAllHeap (fun _ pB ↦ priority ≤ pB) lb ∧ forAllHeap (fun _ pA ↦ priority ≤ pA) ((node lra kra pra rkra rra).meld rb) := by
+                      apply mkLeftistForAll β (fun _ pB ↦ priority ≤ pB) lb ((node lra kra pra rkra rra).meld rb) kb pb hrab
+                    exact bothForAll.right
+
             split
             . apply forAllHeap.node
               . apply parentPredicate β (fun _ pB ↦ priority ≤ pB) lb rb kb pb rkb hB
-              . apply ihRb
-                . apply rightMinHeap β lb rb kb pb rkb hBmin
-                . apply rightForAllHeap β (fun _ pB ↦ priority ≤ pB) lb rb kb pb rkb hB
-                . intro hLaMin hLa
-                  have hlab : forAllHeap (fun _ pA ↦ priority ≤ pA) (la.meld (lb.node kb pb rkb rb)) := by apply ihLa hLaMin hLa
-                  have hrB : forAllHeap (fun _ pB ↦ priority ≤ pB) rb := by apply rightForAllHeap β (fun _ pB ↦ priority ≤ pB) lb rb kb pb rkb hB
-                  rw [meld.eq_def] at hlab
-                  cases la with
-                  | leaf =>
-                      rw [meld.eq_def]
-                      simp
-                      exact hrB
-                  | node lla kla pla rkla rla =>
-                      have lPriority : ¬ pla < pb := by
-                        rw [not_lt]
-                        apply le_trans
-                        . apply hle
-                        . have lol : forAllHeap (fun _ pL => pa ≤ pL) (node lla kla pla rkla rla) := by
-                            apply minHeapLeftForAllHeap β (node lla kla pla rkla rla) ra ka pa rka hAmin
-                          apply parentPredicate β _ lla rla kla pla rkla lol
-
-                      simp [lPriority] at hlab
-                      have bothForAll : forAllHeap (fun _ pB ↦ priority ≤ pB) lb ∧ forAllHeap (fun _ pA ↦ priority ≤ pA) ((lla.node kla pla rkla rla).meld rb) := by
-                        apply mkLeftistForAll β (fun _ pB ↦ priority ≤ pB) lb ((lla.node kla pla rkla rla).meld rb) kb pb hlab
-                      exact bothForAll.right
-
-                . intro hRaMin hRa
-                  have hrab : forAllHeap (fun _ pA ↦ priority ≤ pA) (ra.meld (lb.node kb pb rkb rb)) := by apply ihRa hRaMin hRa
-                  have hrB : forAllHeap (fun _ pB ↦ priority ≤ pB) rb := by apply rightForAllHeap β (fun _ pB ↦ priority ≤ pB) lb rb kb pb rkb hB
-                  rw [meld.eq_def] at hrab
-                  cases ra with
-                  | leaf =>
-                      rw [meld.eq_def]
-                      simp
-                      exact hrB
-                  | node lra kra pra rkra rra =>
-                      have rPriority : ¬ pra < pb := by
-                        rw [not_lt]
-                        apply le_trans
-                        . apply hle
-                        . have lol : forAllHeap (fun _ pL => pa ≤ pL) (node lra kra pra rkra rra) := by
-                            apply minHeapRightForAllHeap β la (node lra kra pra rkra rra) ka pa rka hAmin
-                          apply parentPredicate β _ lra rra kra pra rkra lol
-
-                      simp [rPriority] at hrab
-                      have bothForAll : forAllHeap (fun _ pB ↦ priority ≤ pB) lb ∧ forAllHeap (fun _ pA ↦ priority ≤ pA) ((node lra kra pra rkra rra).meld rb) := by
-                        apply mkLeftistForAll β (fun _ pB ↦ priority ≤ pB) lb ((node lra kra pra rkra rra).meld rb) kb pb hrab
-                      exact bothForAll.right
+              . exact hlarb
               . apply leftForAllHeap β (fun _ pB ↦ priority ≤ pB) lb rb kb pb rkb hB
 
             . apply forAllHeap.node
               . apply parentPredicate β (fun _ pB ↦ priority ≤ pB) lb rb kb pb rkb hB
               . apply leftForAllHeap β (fun _ pB ↦ priority ≤ pB) lb rb kb pb rkb hB
-              . apply ihRb
-                . apply rightMinHeap β lb rb kb pb rkb hBmin
-                . apply rightForAllHeap β (fun _ pB ↦ priority ≤ pB) lb rb kb pb rkb hB
-                . intro hLaMin hLa
-                  have hlab : forAllHeap (fun _ pA ↦ priority ≤ pA) (la.meld (lb.node kb pb rkb rb)) := by apply ihLa hLaMin hLa
-                  have hrB : forAllHeap (fun _ pB ↦ priority ≤ pB) rb := by apply rightForAllHeap β (fun _ pB ↦ priority ≤ pB) lb rb kb pb rkb hB
-                  rw [meld.eq_def] at hlab
-                  cases la with
-                  | leaf =>
-                      rw [meld.eq_def]
-                      simp
-                      exact hrB
-                  | node lla kla pla rkla rla =>
-                      have lPriority : ¬ pla < pb := by
-                        rw [not_lt]
-                        apply le_trans
-                        . apply hle
-                        . have lol : forAllHeap (fun _ pL => pa ≤ pL) (node lla kla pla rkla rla) := by
-                            apply minHeapLeftForAllHeap β (node lla kla pla rkla rla) ra ka pa rka hAmin
-                          apply parentPredicate β _ lla rla kla pla rkla lol
-                      simp [lPriority] at hlab
-                      have bothForAll : forAllHeap (fun _ pB ↦ priority ≤ pB) lb ∧ forAllHeap (fun _ pA ↦ priority ≤ pA) ((lla.node kla pla rkla rla).meld rb) := by
-                        apply mkLeftistForAll β (fun _ pB ↦ priority ≤ pB) lb ((lla.node kla pla rkla rla).meld rb) kb pb hlab
-                      exact bothForAll.right
+              . exact hlarb
 
-                . intro hRaMin hRa
-                  have hrab : forAllHeap (fun _ pA ↦ priority ≤ pA) (ra.meld (lb.node kb pb rkb rb)) := by apply ihRa hRaMin hRa
-                  have hrB : forAllHeap (fun _ pB ↦ priority ≤ pB) rb := by apply rightForAllHeap β (fun _ pB ↦ priority ≤ pB) lb rb kb pb rkb hB
-                  rw [meld.eq_def] at hrab
-                  cases ra with
-                  | leaf =>
-                      rw [meld.eq_def]
-                      simp
-                      exact hrB
-                  | node lra kra pra rkra rra =>
-                      have rPriority : ¬ pra < pb := by
-                        rw [not_lt]
-                        apply le_trans
-                        . apply hle
-                        . have lol : forAllHeap (fun _ pL => pa ≤ pL) (node lra kra pra rkra rra) := by
-                            apply minHeapRightForAllHeap β la (node lra kra pra rkra rra) ka pa rka hAmin
-                          apply parentPredicate β _ lra rra kra pra rkra lol
-                      simp [rPriority] at hrab
-                      have bothForAll : forAllHeap (fun _ pB ↦ priority ≤ pB) lb ∧ forAllHeap (fun _ pA ↦ priority ≤ pA) ((node lra kra pra rkra rra).meld rb) := by
-                        apply mkLeftistForAll β (fun _ pB ↦ priority ≤ pB) lb ((node lra kra pra rkra rra).meld rb) kb pb hrab
-                      exact bothForAll.right
-
-lemma smallForAllHeap : ∀ (β : Type) (oldPriority newPriority: Int) (h : leftistHeap β),
-  forAllHeap (fun _ pH ↦ oldPriority ≤ pH) h → newPriority ≤ oldPriority →  forAllHeap (fun _ pH ↦ newPriority ≤ pH) h := by
-  intro β oldPriority newPriority h hP hPP
-  induction h with
-  | leaf =>
-      apply forAllHeap.leaf
-  | node left key priority rank right ihL ihR =>
-      apply forAllHeap.node
-      . apply le_trans
-        . apply hPP
-        . apply parentPredicate β _ left right key priority rank hP
-      . apply ihL (leftForAllHeap β (fun _ pH ↦ oldPriority ≤ pH) left right key priority rank hP)
-      . apply ihR (rightForAllHeap β (fun _ pH ↦ oldPriority ≤ pH) left right key priority rank hP)
-
-lemma minHeapForAllHeap : ∀ (β : Type) (left right : leftistHeap β) (key : β) (priority : Int) (rank : Nat),
-  minHeap (node left key priority rank right) → forAllHeap (fun _ pH ↦ priority ≤ pH) (node left key priority rank right) := by
-  intro β left right key priority rank h
-  apply forAllHeap.node
-  . trivial
-  . apply minHeapLeftForAllHeap β left right key priority rank h
-  . apply minHeapRightForAllHeap β left right key priority rank h
-
+-- Proof that meld maintains the minHeap property
 theorem meld_minHeap : ∀ (β : Type) (a b : leftistHeap β),
-  minHeap a → minHeap b → minHeap (meld a b) := by
-  intro β a b hA hB
+  validLeftistHeap a → validLeftistHeap b → minHeap (meld a b) := by
+  intro β a b hvA hvB
+  have hA : minHeap a := by apply hvA.left
+  have hB : minHeap b := by apply hvB.left
   induction a with
   | leaf =>
       rw [meld.eq_def]
@@ -453,7 +581,9 @@ theorem meld_minHeap : ∀ (β : Type) (a b : leftistHeap β),
                   . apply minHeapForAllHeap β lb rb kb pb rkb hB
                   . apply le_of_lt hle
               . apply minHeapLeftForAllHeap β la ra ka pa rka hA
-              . apply ihRa (rightMinHeap β la ra ka pa rka hA)
+              . apply ihRa
+                . apply validRight la ra ka pa rka hvA
+                . apply rightMinHeap β la ra ka pa rka hA
               . apply leftMinHeap β la ra ka pa rka hA
 
             . apply minHeap.node
@@ -466,10 +596,61 @@ theorem meld_minHeap : ∀ (β : Type) (a b : leftistHeap β),
                   . apply minHeapForAllHeap β lb rb kb pb rkb hB
                   . apply le_of_lt hle
               . apply leftMinHeap β la ra ka pa rka hA
-              . apply ihRa (rightMinHeap β la ra ka pa rka hA)
+              . apply ihRa
+                . apply validRight la ra ka pa rka hvA
+                . apply rightMinHeap β la ra ka pa rka hA
 
           . rw [mkLeftistNode]
             rw [not_lt] at hle
+
+            have hlarb : ((la.node ka pa rka ra).meld rb).minHeap := by
+              apply ihRb
+              . apply validRight lb rb kb pb rkb hvB
+              . apply rightMinHeap β lb rb kb pb rkb hB
+              . intro hLav hLa
+                have hlab : minHeap (la.meld (lb.node kb pb rkb rb)) := by apply ihLa hLav hLa
+                have hrB : minHeap rb := by apply rightMinHeap β lb rb kb pb rkb hB
+                rw [meld.eq_def] at hlab
+                cases la with
+                | leaf =>
+                    rw [meld.eq_def]
+                    simp
+                    exact hrB
+                | node lla kla pla rkla rla =>
+                    have lPriority : ¬ pla < pb := by
+                      rw [not_lt]
+                      apply le_trans
+                      . apply hle
+                      . have lol : forAllHeap (fun _ pL => pa ≤ pL) (node lla kla pla rkla rla) := by
+                          apply minHeapLeftForAllHeap β (node lla kla pla rkla rla) ra ka pa rka hA
+                        apply parentPredicate β _ lla rla kla pla rkla lol
+                    simp [lPriority] at hlab
+                    have bothForAll : minHeap lb ∧ minHeap ((lla.node kla pla rkla rla).meld rb) := by
+                      apply mkLeftistMinHeap β lb ((lla.node kla pla rkla rla).meld rb) kb pb hlab
+                    exact bothForAll.right
+
+              . intro hRav hRa
+                have hrab : minHeap (ra.meld (lb.node kb pb rkb rb)) := by apply ihRa hRav hRa
+                have hrB : minHeap rb := by apply rightMinHeap β lb rb kb pb rkb hB
+                rw [meld.eq_def] at hrab
+                cases ra with
+                | leaf =>
+                    rw [meld.eq_def]
+                    simp
+                    exact hrB
+                | node lra kra pra rkra rra =>
+                    have rPriority : ¬ pra < pb := by
+                      rw [not_lt]
+                      apply le_trans
+                      . apply hle
+                      . have lol : forAllHeap (fun _ pL => pa ≤ pL) (node lra kra pra rkra rra) := by
+                          apply minHeapRightForAllHeap β la (node lra kra pra rkra rra) ka pa rka hA
+                        apply parentPredicate β _ lra rra kra pra rkra lol
+                    simp [rPriority] at hrab
+                    have bothForAll : minHeap lb ∧ minHeap ((node lra kra pra rkra rra).meld rb) := by
+                      apply mkLeftistMinHeap β lb ((node lra kra pra rkra rra).meld rb) kb pb hrab
+                    exact bothForAll.right
+
             split
             . apply minHeap.node
               . apply meldForAllHeap
@@ -480,52 +661,7 @@ theorem meld_minHeap : ∀ (β : Type) (a b : leftistHeap β),
                   . apply hle
                 . apply minHeapRightForAllHeap β lb rb kb pb rkb hB
               . apply minHeapLeftForAllHeap β lb rb kb pb rkb hB
-              . apply ihRb
-                . apply rightMinHeap β lb rb kb pb rkb hB
-                . intro hLa
-                  have hlab : minHeap (la.meld (lb.node kb pb rkb rb)) := by apply ihLa hLa
-                  have hrB : minHeap rb := by apply rightMinHeap β lb rb kb pb rkb hB
-                  rw [meld.eq_def] at hlab
-                  cases la with
-                  | leaf =>
-                      rw [meld.eq_def]
-                      simp
-                      exact hrB
-                  | node lla kla pla rkla rla =>
-                      have lPriority : ¬ pla < pb := by
-                        rw [not_lt]
-                        apply le_trans
-                        . apply hle
-                        . have lol : forAllHeap (fun _ pL => pa ≤ pL) (node lla kla pla rkla rla) := by
-                            apply minHeapLeftForAllHeap β (node lla kla pla rkla rla) ra ka pa rka hA
-                          apply parentPredicate β _ lla rla kla pla rkla lol
-                      simp [lPriority] at hlab
-                      have bothForAll : minHeap lb ∧ minHeap ((lla.node kla pla rkla rla).meld rb) := by
-                        apply mkLeftistMinHeap β lb ((lla.node kla pla rkla rla).meld rb) kb pb hlab
-                      exact bothForAll.right
-
-                . intro hRa
-                  have hrab : minHeap (ra.meld (lb.node kb pb rkb rb)) := by apply ihRa hRa
-                  have hrB : minHeap rb := by apply rightMinHeap β lb rb kb pb rkb hB
-                  rw [meld.eq_def] at hrab
-                  cases ra with
-                  | leaf =>
-                      rw [meld.eq_def]
-                      simp
-                      exact hrB
-                  | node lra kra pra rkra rra =>
-                      have rPriority : ¬ pra < pb := by
-                        rw [not_lt]
-                        apply le_trans
-                        . apply hle
-                        . have lol : forAllHeap (fun _ pL => pa ≤ pL) (node lra kra pra rkra rra) := by
-                            apply minHeapRightForAllHeap β la (node lra kra pra rkra rra) ka pa rka hA
-                          apply parentPredicate β _ lra rra kra pra rkra lol
-                      simp [rPriority] at hrab
-                      have bothForAll : minHeap lb ∧ minHeap ((node lra kra pra rkra rra).meld rb) := by
-                        apply mkLeftistMinHeap β lb ((node lra kra pra rkra rra).meld rb) kb pb hrab
-                      exact bothForAll.right
-
+              . exact hlarb
               . apply leftMinHeap β lb rb kb pb rkb hB
 
             . apply minHeap.node
@@ -538,137 +674,16 @@ theorem meld_minHeap : ∀ (β : Type) (a b : leftistHeap β),
                   . apply hle
                 . apply minHeapRightForAllHeap β lb rb kb pb rkb hB
               . apply leftMinHeap β lb rb kb pb rkb hB
-              . apply ihRb
-                . apply rightMinHeap β lb rb kb pb rkb hB
-                . intro hLa
-                  have hlab : minHeap (la.meld (lb.node kb pb rkb rb)) := by apply ihLa hLa
-                  have hrB : minHeap rb := by apply rightMinHeap β lb rb kb pb rkb hB
-                  rw [meld.eq_def] at hlab
-                  cases la with
-                  | leaf =>
-                      rw [meld.eq_def]
-                      simp
-                      exact hrB
-                  | node lla kla pla rkla rla =>
-                      have lPriority : ¬ pla < pb := by
-                        rw [not_lt]
-                        apply le_trans
-                        . apply hle
-                        . have lol : forAllHeap (fun _ pL => pa ≤ pL) (node lla kla pla rkla rla) := by
-                            apply minHeapLeftForAllHeap β (node lla kla pla rkla rla) ra ka pa rka hA
-                          apply parentPredicate β _ lla rla kla pla rkla lol
-                      simp [lPriority] at hlab
-                      have bothForAll : minHeap lb ∧ minHeap ((lla.node kla pla rkla rla).meld rb) := by
-                        apply mkLeftistMinHeap β lb ((lla.node kla pla rkla rla).meld rb) kb pb hlab
-                      exact bothForAll.right
+              . exact hlarb
 
-                . intro hRa
-                  have hrab : minHeap (ra.meld (lb.node kb pb rkb rb)) := by apply ihRa hRa
-                  have hrB : minHeap rb := by apply rightMinHeap β lb rb kb pb rkb hB
-                  rw [meld.eq_def] at hrab
-                  cases ra with
-                  | leaf =>
-                      rw [meld.eq_def]
-                      simp
-                      exact hrB
-                  | node lra kra pra rkra rra =>
-                      have rPriority : ¬ pra < pb := by
-                        rw [not_lt]
-                        apply le_trans
-                        . apply hle
-                        . have lol : forAllHeap (fun _ pL => pa ≤ pL) (node lra kra pra rkra rra) := by
-                            apply minHeapRightForAllHeap β la (node lra kra pra rkra rra) ka pa rka hA
-                          apply parentPredicate β _ lra rra kra pra rkra lol
-                      simp [rPriority] at hrab
-                      have bothForAll : minHeap lb ∧ minHeap ((node lra kra pra rkra rra).meld rb) := by
-                        apply mkLeftistMinHeap β lb ((node lra kra pra rkra rra).meld rb) kb pb hrab
-                      exact bothForAll.right
-
-theorem insertLeftist_correct : ∀ (β : Type) (h : leftistHeap β) (newKey : β) (newPriority : Int),
-  minHeap h → minHeap (insertLeftist h newKey newPriority) := by
-  intro β h newKey newPriority hP
-  induction h with
-  | leaf =>
-      rw [insertLeftist, singleton]
-      apply meld_minHeap
-      . apply minHeap.leaf
-      . apply singleton_minHeap
-  | node left key priority rank right ihL ihR =>
-      rw [insertLeftist]
-      apply meld_minHeap
-      . exact hP
-      . apply singleton_minHeap
-
-theorem deleteMinLeftist_correct : ∀ (β : Type) (h : leftistHeap β),
-  minHeap h → ∀ (pair : Option (β × Int)) (h' : leftistHeap β), (pair, h') = (deleteMinLeftist h) → minHeap h' := by
-  intro β h hP pair h' heq
-  induction h with
-  | leaf =>
-      rw [deleteMinLeftist] at heq
-      simp at heq
-      rw [heq.right]
-      apply minHeap.leaf
-  | node left key priority rank right ihL ihR =>
-      rw [deleteMinLeftist] at heq
-      simp at heq
-      rw [heq.right]
-      apply meld_minHeap
-      . apply leftMinHeap β left right key priority rank hP
-      . apply rightMinHeap β left right key priority rank hP
-
-inductive leftistProperty {β : Type} : leftistHeap β → Prop
-| leaf : leftistProperty leaf
-| node left key priority rk right :
-    rank right ≤ rank left →
-    leftistProperty left →
-    leftistProperty right →
-    leftistProperty (node left key priority rk right)
-
-def validLeftistHeap {β : Type} (x : leftistHeap β) := minHeap x ∧ leftistProperty x
-
-lemma singleton_leftistProperty : ∀ (β : Type) (key : β) (priority : Int),
-  leftistProperty (singleton key priority) := by
-  intro β key priority
-  apply leftistProperty.node
-  . simp
-  . apply leftistProperty.leaf
-  . apply leftistProperty.leaf
-
-lemma rightLeftistProperty : ∀ (β : Type) (left right : leftistHeap β) (key : β) (priority : Int) (rk : ℕ),
-  leftistProperty (node left key priority rk right) → leftistProperty right := by
-  intro β left right key priority rk h
-  cases h
-  trivial
-
-lemma leftLeftistProperty : ∀ (β : Type) (left right : leftistHeap β) (key : β) (priority : Int) (rk : ℕ),
-  leftistProperty (node left key priority rk right) → leftistProperty left := by
-  intro β left right key priority rk h
-  cases h
-  trivial
-
-lemma mkLeftistLeftistProperty : ∀ (β : Type) (a b : leftistHeap β) (key : β) (priority : Int),
-  leftistProperty a → leftistProperty b → leftistProperty (mkLeftistNode a key priority b) := by
-  intro β a b key priority hA hB
-  rw [mkLeftistNode]
-  split_ifs with hRank
-  . apply leftistProperty.node
-    . exact le_of_lt hRank
-    . exact hB
-    . exact hA
-  . apply leftistProperty.node
-    . rw [not_lt] at hRank
-      exact hRank
-    . exact hA
-    . exact hB
-
-lemma rankSub {β : Type} (left right : leftistHeap β) (key : β) (priority : Int) (rk : ℕ) :
-  rank (node left key priority rk right)
-
-theorem meldLeftist {β : Type} (a b : leftistHeap β) :
-  leftistProperty a →
-  leftistProperty b →
+-- Proof meld preserves the leftist property
+theorem meldLeftistProperty {β : Type} (a b : leftistHeap β) :
+  validLeftistHeap a →
+  validLeftistHeap b →
   leftistProperty (meld a b) := by
-  intro hA hB
+  intro hvA hvB
+  have hA : leftistProperty a := by apply hvA.right
+  have hB : leftistProperty b := by apply hvB.right
   induction a with
   | leaf =>
       rw [meld.eq_def]
@@ -694,114 +709,313 @@ theorem meldLeftist {β : Type} (a b : leftistHeap β) :
             split_ifs with hRank
             . apply leftistProperty.node
               . exact le_of_lt hRank
-              . exact ihRa hra
-              . exact hla
-
+              . apply ihRa
+                . exact validRight la ra ka pa rka hvA
+                . exact rightLeftistProperty β la ra ka pa rka hA
+              . apply leftLeftistProperty β la ra ka pa rka hA
             . apply leftistProperty.node
               . rw [not_lt] at hRank
                 exact hRank
-              . exact hla
-              . exact ihRa hra
+              . apply leftLeftistProperty β la ra ka pa rka hA
+              . apply ihRa
+                . exact validRight la ra ka pa rka hvA
+                . exact rightLeftistProperty β la ra ka pa rka hA
 
           . rw [mkLeftistNode]
-            split_ifs with hRank
-            . apply leftistProperty.node
-              . exact le_of_lt hRank
+            rw [not_lt] at hle
+            have hlarb : ((la.node ka pa rka ra).meld rb).leftistProperty := by
               . apply ihRb
-                . exact hrb
-                . intro hla
-                  have hlab : leftistProperty (la.meld (lb.node kb pb rkb rb)) := by apply ihLa hla
+                . exact validRight lb rb kb pb rkb hvB
+                . exact rightLeftistProperty β lb rb kb pb rkb hB
+                . intro hlav hla
+                  have hlab : leftistProperty (la.meld (lb.node kb pb rkb rb)) := by apply ihLa hlav hla
+                  have hrB : leftistProperty rb := by apply rightLeftistProperty β lb rb kb pb rkb hB
+                  rw [meld.eq_def] at hlab
                   cases la with
                   | leaf =>
                       rw [meld.eq_def]
                       simp
-                      exact hrb
+                      exact hrB
                   | node lla kla pla rkla rla =>
-                      rw [meld.eq_def] at hlab
-                      simp at hlab
-                      have lol : ¬ pla < pb := by
-                        sorry
-                      simp [lol] at hlab
+                      have lPriority : ¬ pla < pb := by
+                        rw [not_lt]
+                        apply le_trans
+                        . exact hle
+                        . have lol : forAllHeap (fun _ pL => pa ≤ pL) (node lla kla pla rkla rla) := by
+                            apply minHeapLeftForAllHeap β (node lla kla pla rkla rla) ra ka pa rka (hvA.left)
+                          apply parentPredicate β _ lla rla kla pla rkla lol
+                      simp [lPriority] at hlab
+                      rw [← mkLeftistLeftistProperty] at hlab
+                      exact hlab.right
+                . intro hRav hRa
+                  have hrab : leftistProperty (ra.meld (lb.node kb pb rkb rb)) := by apply ihRa hRav hRa
+                  have hrB : leftistProperty rb := by apply rightLeftistProperty β lb rb kb pb rkb hB
+                  rw [meld.eq_def] at hrab
+                  cases ra with
+                  | leaf =>
+                      rw [meld.eq_def]
+                      simp
+                      exact hrB
+                  | node lra kra pra rkra rra =>
+                      have rPriority : ¬ pra < pb := by
+                        rw [not_lt]
+                        apply le_trans
+                        . exact hle
+                        . have lol : forAllHeap (fun _ pL => pa ≤ pL) (node lra kra pra rkra rra) := by
+                            apply minHeapRightForAllHeap β la (node lra kra pra rkra rra) ka pa rka (hvA.left)
+                          apply parentPredicate β _ lra rra kra pra rkra lol
+                      simp [rPriority] at hrab
+                      rw [← mkLeftistLeftistProperty] at hrab
+                      exact hrab.right
 
-
-
-
-                . sorry
-              . exact hlb
+            split_ifs with hRank
+            . apply leftistProperty.node
+              . exact le_of_lt hRank
+              . exact hlarb
+              . apply leftLeftistProperty β lb rb kb pb rkb hB
 
             . apply leftistProperty.node
               . rw [not_lt] at hRank
                 exact hRank
+              . exact leftLeftistProperty β lb rb kb pb rkb hB
+              . exact hlarb
+
+-- Given all these lemmas, we can now prove that the the entire interface respects validity
+theorem empty_valid {β : Type} : validLeftistHeap (empty β) := by
+  rw [validLeftistHeap]
+  constructor
+  . apply minHeap.leaf
+  . apply leftistProperty.leaf
+
+theorem meld_valid : ∀ (β : Type) (a b : leftistHeap β),
+  validLeftistHeap a → validLeftistHeap b → validLeftistHeap (meld a b) := by
+  intro β a b hvA hvB
+  rw [validLeftistHeap]
+  constructor
+  . apply meld_minHeap
+    . exact hvA
+    . exact hvB
+  . apply meldLeftistProperty
+    . exact hvA
+    . exact hvB
+
+theorem insert_valid : ∀ (β : Type) (h : leftistHeap β) (key : β) (priority : Int) ,
+  validLeftistHeap h → validLeftistHeap (insert h key priority) := by
+  intro β h key priority hv
+  rw [insert]
+  apply meld_valid
+  . exact hv
+  . exact singleton_valid key priority
+
+theorem deleteMin_valid : ∀ (β : Type) (a : leftistHeap β),
+  validLeftistHeap a → ∀ (pair : Option (β × Int)) (a' : leftistHeap β ), (pair, a') = deleteMin a → validLeftistHeap a' := by
+  intro β a h pair a' h'
+  rw [deleteMin.eq_def] at h'
+  cases a with
+  | leaf =>
+      simp at h'
+      rw [h'.right, validLeftistHeap]
+      constructor
+      . exact minHeap.leaf
+      . exact leftistProperty.leaf
+
+  | node l k p rk r =>
+      have hl : validLeftistHeap l := by apply validLeft l r k p rk h
+      have hr : validLeftistHeap r := by apply validRight l r k p rk h
+
+      simp at h'
+      rw [h'.right]
+      apply meld_valid
+      . exact hl
+      . exact hr
+
+-- PROOF OF CORRECTNESS PART 2: COMPUTATIONAL COMPLEXITY
+/-
+We get the desired time bounds on all operations by arguing that for a given
+valid leftist heap h , the rank of the heap is bounded by log2(size h + 1).
+
+We show this holds, then reference the comments on all interface operations for a brief
+explanation of how this gives us the desired time bounds.
+-/
+
+-- The size of a leftist heap is defined the same as the size of a binary tree
+def size {β : Type} : leftistHeap β → Nat
+  | leaf => 0
+  | node left _ _ _ right => size left + size right + 1
+
+/-
+The rank of a heap is the length of its right spine. In our actual implementation,
+we store the rank of a node in the actual heap. We do this so that way mkLeftistNode
+is constant time, and that we don't have to recompute it each time, which would put us
+severely out of time bounds. We define it recursively beneath as that defintion
+lends itself to actually proving the rank bound, and then take as an axiom that
+the this defintion is equal to the rank stored in the heap.
+-/
+def recursiveRank {β : Type} : leftistHeap β → ℕ
+  | leaf => 0
+  | node _ _ _ _ right => 1 + recursiveRank right
+
+axiom rankEqRecursive : ∀ (β : Type) (a : leftistHeap β), rank a = recursiveRank a
+
+-- Attempting to prove equivalence of the two via melding
+inductive rankHeap {β : Type} : leftistHeap β → Prop
+  | leaf : rankHeap leaf
+  | node left key priority rk right :
+      rank (node left key priority rk right) = recursiveRank (node left key priority rk right) →
+      rankHeap left →
+      rankHeap right →
+      rankHeap (node left key priority rk right)
+
+def leftRankHeap {β : Type} (left right : leftistHeap β) (key : β) (priority : Int) (rk : ℕ) :
+  rankHeap (node left key priority rk right) → rankHeap left := by
+  intro h
+  rcases h
+  trivial
+
+def rightRankHeap {β : Type} (left right : leftistHeap β) (key : β) (priority : Int) (rk : ℕ) :
+  rankHeap (node left key priority rk right) → rankHeap right := by
+  intro h
+  rcases h
+  trivial
+
+def rankHeapPredicate {β : Type} (a : leftistHeap β) :
+  rankHeap a → rank a = recursiveRank a := by
+  intro h
+  rcases h
+  . trivial
+  . trivial
+
+def rankHeapSingleton {β : Type} (key : β) (priority : Int) :
+  rankHeap (singleton key priority) := by
+  apply rankHeap.node
+  . rw [rank, recursiveRank, recursiveRank]
+  . apply rankHeap.leaf
+  . apply rankHeap.leaf
+
+def rankHeapMeld {β : Type} (a b : leftistHeap β) :
+  rankHeap a → rankHeap b → rankHeap (meld a b) := by
+  intro ha hb
+  induction a with
+  | leaf =>
+      rw [meld.eq_def]
+      simp
+      exact hb
+  | node la ka pa rka ra ihLa ihRa =>
+      induction b with
+      | leaf =>
+          rw [meld.eq_def]
+          simp
+          exact ha
+      | node lb kb pb rkb rb ihLb ihRb =>
+          rw [meld.eq_def]
+          simp
+
+          have hla : rankHeap la := by apply leftRankHeap la ra ka pa rka ha
+          have hra : rankHeap ra := by apply rightRankHeap la ra ka pa rka ha
+          have hlb : rankHeap lb := by apply leftRankHeap lb rb kb pb rkb hb
+          have hrb : rankHeap rb := by apply rightRankHeap lb rb kb pb rkb hb
+
+          split_ifs with hle
+          . rw [mkLeftistNode]
+            split_ifs with hRank
+            . apply rankHeap.node
+              . rw [rank, recursiveRank, rankHeapPredicate la hla, add_comm]
+              . exact ihRa hra
+              . exact hla
+
+            . apply rankHeap.node
+              . rw [rank, recursiveRank, rankHeapPredicate (ra.meld (lb.node kb pb rkb rb)) (ihRa hra) , add_comm]
+              . exact hla
+              . exact ihRa hra
+          . rw [mkLeftistNode]
+            rw [not_lt] at hle
+            split_ifs with hRank
+            . apply rankHeap.node
+              . rw [rank, recursiveRank, rankHeapPredicate lb hlb, add_comm]
+              . sorry
+              . exact hlb
+
+            . apply rankHeap.node
+              . rw [rank, recursiveRank]
+                sorry
               . exact hlb
               . sorry
 
-          -- . apply mkLeftistLeftistProperty
-          --   . exact leftLeftistProperty β la ra ka pa rka hA
-          --   . exact ihRa hra
+-- attempt over
 
-          -- . apply mkLeftistLeftistProperty
-          --   . exact hlb
-          --   . apply ihRb
-          --     . exact hrb
-          --     . intro _
-          --       have hlab : leftistProperty (la.meld (lb.node kb pb rkb rb)) := by apply ihLa hla
-          --       have hrB : leftistProperty rb := by apply rightLeftistProperty β lb rb kb pb rkb hB
+/-
+Lemma that a leftist heap with rank r has size at least 2^r - 1.
+This makes proving the actual bound significantly easier
+-/
+lemma rankEntries {β : Type} : ∀ (a : leftistHeap β),
+  validLeftistHeap a → size a ≥ 2 ^ (rank a) - 1 := by
+  intro a h
+  induction a with
+  | leaf =>
+      rw [size, rankEqRecursive, recursiveRank]
+      simp
+  | node l k p rk r ihL ihR =>
+      rw [size, rankEqRecursive , recursiveRank]
+      rw [rankEqRecursive] at ihL ihR
 
-          --       sorry
-          --     . intro _
-          --       sorry
+      have ihL : size l ≥ 2 ^ (recursiveRank l) - 1 := by apply ihL (validLeft l r k p rk h)
+      have ihR: size r ≥ 2 ^ (recursiveRank r) - 1 := by apply ihR (validRight l r k p rk h)
 
+      have hvL : validLeftistHeap l := by apply validLeft l r k p rk h
+      have hvR : validLeftistHeap r := by apply validRight l r k p rk h
 
+      have hLgR : rank r ≤ rank l := by
+         rcases (validLeftistProperty (node l k p rk r) h)
+         trivial
 
-structure PriorityQueue (β : Type) where
-  heap : leftistHeap β -- the heap structure containing the elements
-  p : β → Int -- the priority function that assigns a priority to each element
+      have hLgR : recursiveRank r ≤ recursiveRank l := by
+        rw [← rankEqRecursive, ← rankEqRecursive]
+        exact hLgR
 
-def newPriorityQueue {β : Type} (p : β → Int) : PriorityQueue β :=
-  PriorityQueue.mk leftistHeap.leaf p
+      have hLgR : 2 ^ (recursiveRank r) - 1 ≤ 2 ^ (recursiveRank l) - 1 := by
+        apply tsub_le_tsub_right
+        rw [pow_le_pow_iff_right₀]
+        . exact hLgR
+        . trivial
 
-def insertPQ {β : Type} (pq : PriorityQueue β) (key : β) : PriorityQueue β :=
-  PriorityQueue.mk (leftistHeap.insertLeftist pq.heap key (pq.p key)) pq.p
+      have ihL : l.size ≥ 2 ^ r.recursiveRank - 1 := by
+        apply le_trans
+        . exact hLgR
+        . exact ihL
 
-def deleteMinPQ {β : Type} (pq : PriorityQueue β) : Option (β × Int) × PriorityQueue β :=
-  let (pair, heap) := deleteMinLeftist pq.heap
-  (pair, PriorityQueue.mk heap pq.p)
+      have leftGe : size l + size r + 1 ≥ 2 ^ (recursiveRank r) - 1 + 2 ^ (recursiveRank r) - 1 + 1 := by
+        apply add_le_add
+        . norm_num
+          rw [add_assoc]
+          apply add_le_add
+          . exact ihL
+          . rw [← tsub_le_iff_right]
+            exact ihR
+        . trivial
 
-def meldPQ {β : Type} (pq1 pq2 : PriorityQueue β) : PriorityQueue β :=
-  PriorityQueue.mk (leftistHeap.meld pq1.heap pq2.heap) pq1.p
+      have rightGe : 2 ^ (recursiveRank r) - 1 + 2 ^ (recursiveRank r) - 1 + 1 ≥ 2 ^ (1 + r.recursiveRank) - 1 := by
+        rw [add_comm 1, Nat.two_pow_succ]
+        omega
 
-def insertPQ_correct : ∀ (β : Type) (pq : PriorityQueue β) (key : β),
-  minHeap pq.heap → minHeap (insertPQ pq key).heap := by
-  intro β pq key hP
-  apply insertLeftist_correct
-  exact hP
+      apply ge_trans
+      . exact leftGe
+      . exact rightGe
 
--- This is basically done I just don't know what tactics to use to instantiate
-def deleteMinPQ_correct : ∀ (β : Type) (pq : PriorityQueue β),
-  minHeap pq.heap → ∀ (pair : Option (β × Int)) (pq' : PriorityQueue β), (pair, pq') = deleteMinPQ pq → minHeap pq'.heap := by
-  intro β pq hP pair pq' heq
-  rw [deleteMinPQ] at heq
-  simp at heq
-  rw [heq.right]
-  simp
-  sorry
+/-
+The leftist rank lemma abuses the leftist property to show that the rank of a leftist heap
+is logarithmic with respect to the number of nodes. Given that this is true, we get
+desired time bounds on all operations.
+-/
+theorem leftistRank {β : Type} : ∀ (a : leftistHeap β),
+  validLeftistHeap a → rank a ≤ Nat.log2 (size a + 1) := by
+  intro a h
+  rw [Nat.le_log2, ← tsub_le_iff_right]
+  apply rankEntries a
+  . exact h
+  . rw [size.eq_def]
+    split
+    . simp
+    . simp
 
-  -- cases pq.heap with
-  -- | leaf =>
-  --     rw [deleteMinLeftist]
-  --     simp
-  --     apply minHeap.leaf
-  -- | node left key priority rank right =>
-  --     rw [deleteMinLeftist]
-  --     apply meld_minHeap
-  --     . sorry
-  --     . sorry
-
-def x := newPriorityQueue (fun x : Nat ↦ x + 1)
-def y := insertPQ x 5
-def z := insertPQ x 10
-def a := meldPQ y z
-#eval a.heap
-#eval (deleteMinPQ a).snd.heap
 
 end leftistHeap
